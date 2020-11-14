@@ -213,6 +213,9 @@ class SSBMEnv(gym.Env):
         self._is_dolphin_running = False
     
     def step(self, action): # step should advance our state (in the form of the obs space)
+        self.ctrlr_port = melee.gamestate.port_detector(self.gamestate, self.ctrlr, self.char1) # apparently we need to do this every step
+        self.ctrlr_op_port = melee.gamestate.port_detector(self.gamestate, self.ctrlr_op, self.char2)
+
         prev_gamestate = self.gamestate
         # perform actions
         self._perform_action(0, action["player"])
@@ -271,8 +274,8 @@ if __name__ == "__main__":
     while not done:
         curr_time = time.time() - start_time
         print(">>>>>", curr_time)
-        if curr_time > 18:
-            start_time = time.time()
-            ssbm_env.reset()
+        # if curr_time > 18:
+        #     start_time = time.time()
+        #     ssbm_env.reset()
         done = ssbm_env.step({"player": 35, "player_op": 0})[0][2]
         done = ssbm_env.step({"player": 31, "player_op": 0})[0][2]
