@@ -414,13 +414,20 @@ def get_action(name):
     return actions_list.index(name)
 
 keymap = {
-    'w': "BUTTON_MAIN51",
-    'a': "BUTTON_MAIN05",
-    's': "BUTTON_MAIN50",
-    'd': "BUTTON_MAIN15",
-    'j': "BUTTON_A",
-    'k': "BUTTON_B",
-    'l': "BUTTON_Z"
+    'w': "BUTTON_MAIN51", # up
+    'a': "BUTTON_MAIN05", # left
+    's': "BUTTON_MAIN50", # down
+    'd': "BUTTON_MAIN15", # right
+    'j': "BUTTON_A",      # attack
+    'k': "BUTTON_B",      # special
+    'l': "BUTTON_L",      # shield
+    'i': "BUTTON_X",      # jump
+    ';': "BUTTON_Z",      # grab
+    ',': "BUTTON_D_UP",   # taunt
+    'r': "BUTTON_C51",    # up smash
+    'f': "BUTTON_C05",    # left smash
+    'g': "BUTTON_C50",    # down smash
+    'h': "BUTTON_C15",    # right smash
 }
 
 def action_from_keys(keys):
