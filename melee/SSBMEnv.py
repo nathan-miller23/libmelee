@@ -51,7 +51,7 @@ Observation space: [p1_char, p1_x, p1_y, p1_percent, p1_shield, p1_facing, p1_ac
 buttons = [enums.Button.BUTTON_A, enums.Button.BUTTON_B, enums.Button.BUTTON_X, enums.Button.BUTTON_Y, enums.Button.BUTTON_Z,
                enums.Button.BUTTON_L, enums.Button.BUTTON_R, enums.Button.BUTTON_D_UP, enums.Button.BUTTON_D_DOWN, enums.Button.BUTTON_D_LEFT,
                enums.Button.BUTTON_D_RIGHT]
-intervals = [(0, 0), (0.5, 0), (0, 0.5), (1, 0), (0, 1), (1, 0.5), (0.5, 1), (1, 1)]
+intervals = [(0, 0), (0.5, 0), (0, 0.5), (1, 0), (0.5, 0.5), (0, 1), (1, 0.5), (0.5, 1), (1, 1)]
 
 
 class SSBMEnv(MultiAgentEnv):
@@ -408,7 +408,7 @@ class SSBMEnv(MultiAgentEnv):
     def render(self, mode='human', close=False):    # FIXME: changing this parameter does nothing rn??
         self.console.render = True
     
-actions_list = ["ZERO", "BUTTON_A","BUTTON_B","BUTTON_X","BUTTON_Y","BUTTON_Z","BUTTON_L","BUTTON_R","BUTTON_D_UP","BUTTON_D_DOWN","BUTTON_D_LEFT","BUTTON_D_RIGHT","BUTTON_A_R","BUTTON_B_R","BUTTON_X_R","BUTTON_Y_R","BUTTON_Z_R","BUTTON_L_R","BUTTON_R_R","BUTTON_D_UP_R","BUTTON_D_DOWN_R","BUTTON_D_LEFT_R","BUTTON_D_RIGHT_R","BUTTON_MAIN00", "BUTTON_MAIN50", "BUTTON_MAIN05", "BUTTON_MAIN10", "BUTTON_MAIN01", "BUTTON_MAIN15", "BUTTON_MAIN51", "BUTTON_MAIN11", "BUTTON_C00", "BUTTON_C50", "BUTTON_C05", "BUTTON_C10", "BUTTON_C01", "BUTTON_C15", "BUTTON_C51", "BUTTON_C11"]
+actions_list = ["ZERO", "BUTTON_A","BUTTON_B","BUTTON_X","BUTTON_Y","BUTTON_Z","BUTTON_L","BUTTON_R","BUTTON_D_UP","BUTTON_D_DOWN","BUTTON_D_LEFT","BUTTON_D_RIGHT","BUTTON_A_R","BUTTON_B_R","BUTTON_X_R","BUTTON_Y_R","BUTTON_Z_R","BUTTON_L_R","BUTTON_R_R","BUTTON_D_UP_R","BUTTON_D_DOWN_R","BUTTON_D_LEFT_R","BUTTON_D_RIGHT_R","BUTTON_MAIN00", "BUTTON_MAIN50", "BUTTON_MAIN05", "BUTTON_MAIN10", "BUTTON_MAIN55", "BUTTON_MAIN01", "BUTTON_MAIN15", "BUTTON_MAIN51", "BUTTON_MAIN11", "BUTTON_C00", "BUTTON_C50", "BUTTON_C05", "BUTTON_C10", "BUTTON_C55", "BUTTON_C01", "BUTTON_C15", "BUTTON_C51", "BUTTON_C11"]
 
 def get_action(name):
     return actions_list.index(name)
@@ -474,9 +474,9 @@ def process_released():
 
 def complement(action):
     if "MAIN" in actions_list[action]:
-        return get_action("ZERO") # idk
+        return get_action("BUTTON_MAIN55") # idk
     elif "BUTTON_C" in actions_list[action]:
-        return get_action("ZERO") # idk
+        return get_action("BUTTON_C55") # idk
     elif actions_list[action] == "ZERO":
         return get_action("ZERO")
     else:
