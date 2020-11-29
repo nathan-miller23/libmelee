@@ -4,6 +4,8 @@ from gym import error, spaces, utils
 from gym.utils import seeding
 import numpy as np 
 from melee import enums
+import pynput
+import json
 
 """
 Gym compatible env for libmelee (an RL framework for SSBM)
@@ -78,9 +80,13 @@ class SSBMEnv(MultiAgentEnv):
         - log: are we logging stuff?
         - reward_func: custom reward function should take two gamestate objects as input and output a tuple
                        containing the reward for the player and opponent
+        - statedump_prefix: every reset, save the past history as JSON
+          array of dict {'state': state, agent_name: agent_action ... }
+          to the file {statedump_prefix}_{n}.txt where n starts at 1 and
+          increments every reset.
     """
     def __init__(self, dolphin_exe_path, ssbm_iso_path, char1=melee.Character.FOX, char2=melee.Character.FALCO, 
-                stage=melee.Stage.FINAL_DESTINATION, symmetric=False, cpu_level=1, log=False, reward_func=None, render=False):
+                stage=melee.Stage.FINAL_DESTINATION, symmetric=False, cpu_level=1, log=False, reward_func=None, render=False, statedump_prefix=None):
         self.dolphin_exe_path = dolphin_exe_path
         self.ssbm_iso_path = ssbm_iso_path
         self.char1 = char1
@@ -94,6 +100,8 @@ class SSBMEnv(MultiAgentEnv):
         self.log = log
         self.console = None
         self._is_dolphin_running = False
+        self.statedump_prefix = statedump_prefix
+        self.statedump_n = 0
 
         self.get_reward = self._default_get_reward if not self.reward_func else self.reward_func
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(39,), dtype=np.float32)
@@ -243,9 +251,11 @@ class SSBMEnv(MultiAgentEnv):
             raise RuntimeError("Controller port inconsistency!")
         
         prev_gamestate = self.gamestate
+        self.state_data.append({'state': self._get_state()})
         # perform actions
         for agent_idx, agent in enumerate(self.agents):
             action = joint_action[agent]
+            self.state_data[-1][agent] = action
             self._perform_action(agent_idx, action)
         
         # step env
@@ -253,6 +263,7 @@ class SSBMEnv(MultiAgentEnv):
         # collect reward
         reward = self.get_reward(prev_gamestate, self.gamestate)
         state = self._get_state()
+        self.state_data[-1]['next_state'] = state
         # determine if game is over and write extra info
         done = self._get_done()
         info = self._get_info()
@@ -262,8 +273,26 @@ class SSBMEnv(MultiAgentEnv):
         
         return state, reward, done, info
     
+    def state_np_to_list(self, dictionary):
+        for entry in dictionary:
+            if isinstance(dictionary[entry], np.ndarray):
+                dictionary[entry] = dictionary[entry].tolist()
+            elif isinstance(dictionary[entry], dict):
+                self.state_np_to_list(dictionary[entry])
+    
+    def dump_state(self):
+        if self.statedump_prefix is not None:
+            if self.statedump_n > 0:
+                with open(f"./{self.statedump_prefix}_{self.statedump_n}.txt", "w") as f:
+                    for entry in self.state_data:
+                        self.state_np_to_list(entry)
+                    f.write(json.dumps(self.state_data))
+            self.statedump_n += 1
+        self.state_data = []
 
     def reset(self):    # TODO: should reset state to initial state, how to do this?
+        self.dump_state()
+        
         if self._is_dolphin_running:
             self._stop_dolphin()
 
@@ -290,6 +319,72 @@ class SSBMEnv(MultiAgentEnv):
     def render(self, mode='human', close=False):    # FIXME: changing this parameter does nothing rn??
         self.console.render = True
     
+actions_list = ["ZERO", "BUTTON_A","BUTTON_B","BUTTON_X","BUTTON_Y","BUTTON_Z","BUTTON_L","BUTTON_R","BUTTON_D_UP","BUTTON_D_DOWN","BUTTON_D_LEFT","BUTTON_D_RIGHT","BUTTON_A_R","BUTTON_B_R","BUTTON_X_R","BUTTON_Y_R","BUTTON_Z_R","BUTTON_L_R","BUTTON_R_R","BUTTON_D_UP_R","BUTTON_D_DOWN_R","BUTTON_D_LEFT_R","BUTTON_D_RIGHT_R","BUTTON_MAIN00", "BUTTON_MAIN50", "BUTTON_MAIN05", "BUTTON_MAIN10", "BUTTON_MAIN01", "BUTTON_MAIN15", "BUTTON_MAIN51", "BUTTON_MAIN11", "BUTTON_C00", "BUTTON_C50", "BUTTON_C05", "BUTTON_C10", "BUTTON_C01", "BUTTON_C15", "BUTTON_C51", "BUTTON_C11"]
+
+def get_action(name):
+    return actions_list.index(name)
+
+keymap = {
+    'w': "BUTTON_MAIN51",
+    'a': "BUTTON_MAIN05",
+    's': "BUTTON_MAIN50",
+    'd': "BUTTON_MAIN15",
+    'j': "BUTTON_A",
+    'k': "BUTTON_B",
+    'l': "BUTTON_Z"
+}
+
+def action_from_keys(keys):
+    keystring = "".join(sorted([str(k).strip("'\"") for k in keys]))
+    for mapkey in keymap:
+        if "".join(sorted(mapkey)) == keystring:
+            return get_action(keymap[mapkey])
+    return 0
+
+# https://stackoverflow.com/questions/27750536/python-input-single-character-without-enter
+def getchar():
+    tty.setraw(sys.stdin.fileno())
+    return sys.stdin.read(1)
+
+keys_pressed = []
+keys_released = []
+actions_taken = []
+
+def on_press(key):
+    global keys_pressed
+    if key not in keys_pressed:
+        keys_pressed.append(key)
+
+def on_release(key):
+    global keys_released
+    if key in keys_pressed:
+        keys_pressed.remove(key)
+    if key not in keys_released:
+        keys_released.append(key)
+
+def process_pressed():
+    global keys_pressed
+    action = action_from_keys([keys_pressed.pop()])
+    if action not in actions_taken:
+        actions_taken.append(action)
+    return action
+
+def process_released():
+    action = action_from_keys([keys_released.pop()])
+    if action in actions_taken:
+        actions_taken.remove(action)
+        return complement(action)
+    return get_action("ZERO")
+
+def complement(action):
+    if "MAIN" in actions_list[action]:
+        return get_action("ZERO") # idk
+    elif "BUTTON_C" in actions_list[action]:
+        return get_action("ZERO") # idk
+    elif actions_list[action] == "ZERO":
+        return get_action("ZERO")
+    else:
+        return get_action(actions_list[action]+"_R")
 
 if __name__ == "__main__":
     import time
@@ -303,32 +398,44 @@ if __name__ == "__main__":
                         help='Whether to set oponent as CPU')
     parser.add_argument('--cpu_level', '-l', type=int, default=3,
                         help='Level of CPU. Only valid if cpu is true')
+    parser.add_argument('--human', '-m', action='store_true', help='P1 Human')
+    parser.add_argument('--statedump', '-s', help='where to dump states to')
 
     args = parser.parse_args()
+    
+    pynput.keyboard.Listener(on_press=on_press, on_release=on_release).start()
 
-    ssbm_env = SSBMEnv(args.dolphin_executable_path, args.iso_path, symmetric=not args.cpu, cpu_level=args.cpu_level, log=True, render=True)
+    ssbm_env = SSBMEnv(args.dolphin_executable_path, args.iso_path, symmetric=not args.cpu, cpu_level=args.cpu_level, statedump_prefix=args.statedump, log=True, render=True)
     obs = ssbm_env.reset()
 
-    start_time = time.time()
     done = False
+    
     while not done:
-        curr_time = time.time() - start_time
-        print(">>>>>", curr_time)
-        if curr_time > 18:
-            start_time = time.time()
-            ssbm_env.reset()
-        
         # Perform first part of upsmash
-        joint_action = {'ai_1' : 35}
+        joint_action = {}
+        if args.human:
+                if keys_released:
+                    action = process_released()
+                elif keys_pressed:
+                    action = process_pressed()
+                else:
+                    action = 0
+                joint_action['ai_1'] = action
+        else:
+            joint_action['ai_1'] = 35
         if not args.cpu:
             joint_action['ai_2'] = 0
         obs, reward, done, info = ssbm_env.step(joint_action)
         done = done['__all__']
 
-        # Perform second part of upsmash
-        if not done:
-            joint_action = {'ai_1' : 31}
-            if not args.cpu:
-                joint_action['ai_2'] = 0
-            obs, reward, done, info = ssbm_env.step(joint_action)
-            done = done['__all__']
+        if not args.human:
+            # Perform second part of upsmash
+            joint_action = {}
+            if not done:
+                joint_action['ai_1'] = 31
+                if not args.cpu:
+                    joint_action['ai_2'] = 0
+                obs, reward, done, info = ssbm_env.step(joint_action)
+                done = done['__all__']
+        
+    ssbm_env.dump_state() # dump the log. normally done w/env.reset()
