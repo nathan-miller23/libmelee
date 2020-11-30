@@ -410,6 +410,8 @@ class SSBMEnv(MultiAgentEnv):
         done = self._get_done()
         info = self._get_info()
 
+        all_done = done['__all__']
+
         # Log (s_t, a_t, s'_t) data if necessary
         if self.dump_states:
             # Log a_t
@@ -417,8 +419,10 @@ class SSBMEnv(MultiAgentEnv):
                 self.state_data[-1][agent] = joint_action[agent]
             # Log s'_t
             self.state_data[-1]['next_state'] = state
-            # Log s_{t+1}
-            self.state_data.append({ "state" : state })
+            # Begin next (s, a, s') tuple if not done
+            if not all_done:
+                # Log s_{t+1}
+                self.state_data.append({ "state" : state })
 
         if self.gamestate.menu_state != melee.enums.Menu.IN_GAME:
             for key, _  in done.items():
@@ -427,7 +431,7 @@ class SSBMEnv(MultiAgentEnv):
             for key, _ in done.items():
                 done[key] = False
 
-        if done['__all__']:
+        if all_done:
             self._stop_dolphin()
         
         return state, reward, done, info
