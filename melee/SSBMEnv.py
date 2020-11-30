@@ -38,18 +38,29 @@ BUTTON_D_RIGHT = "D_RIGHT"
 #Control sticks considered "buttons" here
 BUTTON_MAIN = "MAIN"
 BUTTON_C = "C"
-Action space: [BUTTON_A, BUTTON_B, BUTTON_X, BUTTON_Y, BUTTON_Z, BUTTON_L, BUTTON_R, BUTTON_D_UP, BUTTON_D_DOWN, BUTTON_D_LEFT, BUTTON_D_RIGHT,
-                BUTTON_A_R, BUTTON_B_R, BUTTON_X_R, BUTTON_Y_R, BUTTON_Z_R, BUTTON_L_R, BUTTON_R_R, BUTTON_D_UP_R, BUTTON_D_DOWN_R, BUTTON_D_LEFT_R, BUTTON_D_RIGHT_R,
-                BUTTON_MAIN (0, 0), BUTTON_MAIN (0.5, 0), BUTTON_MAIN (0, 0.5), BUTTON_MAIN (1, 0), BUTTON_MAIN (0, 1), BUTTON_MAIN (1, 0.5), BUTTON_MAIN (0.5, 1), BUTTON_MAIN (1, 1),
-                BUTTON_C (0, 0), BUTTON_C (0.5, 0), BUTTON_C (0, 0.5), BUTTON_C (1, 0), BUTTON_C (0, 1), BUTTON_C (1, 0.5), BUTTON_C (0.5, 1), BUTTON_C (1, 1)]
+Action space: [BUTTON_A, BUTTON_B, BUTTON_X, BUTTON_Z,
+               BUTTON_L, BUTTON_R, BUTTON_D_UP, BUTTON_D_DOWN,
+               BUTTON_D_LEFT, BUTTON_D_RIGHT, BUTTON_A_R, BUTTON_B_R,
+               BUTTON_X_R, BUTTON_Z_R, BUTTON_L_R,
+               BUTTON_R_R, BUTTON_D_UP_R, BUTTON_D_DOWN_R,
+               BUTTON_D_LEFT_R, BUTTON_D_RIGHT_R,
+               BUTTON_MAIN ..., BUTTON_C ...]
 
-Observation space: [p1_char, p1_x, p1_y, p1_percent, p1_shield, p1_facing, p1_action_enum_value, p1_action_frame, p1_invulnerable, p1_invulnerable_left, p1_hitlag, p1_hitstun_frames_left, p1_jumps_left, p1_on_ground, p1_speed_air_x_self,
-                    p1_speed_y_self, p1_speed_x_attack, p1_speed_y_attack, p1_speed_ground_x_self, distance_btw_players, ...p2 same attr...]
+Observation space: [p1_char, p1_x, p1_y, p1_percent, p1_shield,
+                    p1_facing, p1_action_enum_value, p1_action_frame,
+                    p1_invulnerable, p1_invulnerable_left, p1_hitlag,
+                    p1_hitstun_frames_left, p1_jumps_left, p1_on_ground,
+                    p1_speed_air_x_self, p1_speed_y_self,
+                    p1_speed_x_attack, p1_speed_y_attack,
+                    p1_speed_ground_x_self, distance_btw_players,
+                    ...p2 same attr...]
 """
 
-buttons = [enums.Button.BUTTON_A, enums.Button.BUTTON_B, enums.Button.BUTTON_X, enums.Button.BUTTON_Z,
-               enums.Button.BUTTON_L, enums.Button.BUTTON_R, enums.Button.BUTTON_D_UP, enums.Button.BUTTON_D_DOWN, enums.Button.BUTTON_D_LEFT,
-               enums.Button.BUTTON_D_RIGHT]
+buttons = [enums.Button.BUTTON_A, enums.Button.BUTTON_B,
+           enums.Button.BUTTON_X, enums.Button.BUTTON_Z,
+           enums.Button.BUTTON_L, enums.Button.BUTTON_R,
+           enums.Button.BUTTON_D_UP, enums.Button.BUTTON_D_DOWN,
+           enums.Button.BUTTON_D_LEFT, enums.Button.BUTTON_D_RIGHT]
 
 tilt_bins = [0.0, 0.25, 0.5, 0.75, 1.0]
 intervals = list(product(tilt_bins, repeat=2))
@@ -417,8 +428,9 @@ class SSBMEnv(MultiAgentEnv):
                 self.state_data[-1][agent] = joint_action[agent]
             # Log s'_t
             self.state_data[-1]['next_state'] = state
-            # Log s_{t+1}
-            self.state_data.append({ "state" : state })
+            # Log s_{t+1} only if not done
+            if not done['__all__']:
+                self.state_data.append({ "state" : state })
 
         if self.gamestate.menu_state != melee.enums.Menu.IN_GAME:
             for key, _  in done.items():
@@ -475,26 +487,37 @@ class SSBMEnv(MultiAgentEnv):
     def render(self, mode='human', close=False):    # FIXME: changing this parameter does nothing rn??
         self.console.render = True
     
-actions_list = ["ZERO", "BUTTON_A","BUTTON_B","BUTTON_X","BUTTON_Y","BUTTON_Z","BUTTON_L","BUTTON_R","BUTTON_D_UP","BUTTON_D_DOWN","BUTTON_D_LEFT","BUTTON_D_RIGHT","BUTTON_A_R","BUTTON_B_R","BUTTON_X_R","BUTTON_Y_R","BUTTON_Z_R","BUTTON_L_R","BUTTON_R_R","BUTTON_D_UP_R","BUTTON_D_DOWN_R","BUTTON_D_LEFT_R","BUTTON_D_RIGHT_R","BUTTON_MAIN00", "BUTTON_MAIN50", "BUTTON_MAIN05", "BUTTON_MAIN10", "BUTTON_MAIN55", "BUTTON_MAIN01", "BUTTON_MAIN15", "BUTTON_MAIN51", "BUTTON_MAIN11", "BUTTON_C00", "BUTTON_C50", "BUTTON_C05", "BUTTON_C10", "BUTTON_C55", "BUTTON_C01", "BUTTON_C15", "BUTTON_C51", "BUTTON_C11"]
+actions_list = [
+    "ZERO", "BUTTON_A", "BUTTON_B", "BUTTON_X", "BUTTON_Z", "BUTTON_L",
+    "BUTTON_R", "BUTTON_D_UP", "BUTTON_D_DOWN", "BUTTON_D_LEFT",
+    "BUTTON_D_RIGHT", "BUTTON_A_R", "BUTTON_B_R", "BUTTON_X_R",
+    "BUTTON_Z_R", "BUTTON_L_R", "BUTTON_R_R", "BUTTON_D_UP_R",
+    "BUTTON_D_DOWN_R", "BUTTON_D_LEFT_R", "BUTTON_D_RIGHT_R",
+    *[f"BUTTON_MAIN{interval}" for interval in intervals],
+    *[f"BUTTON_C{interval}" for interval in intervals]
+]
 
 def get_action(name):
     return actions_list.index(name)
 
 keymap = {
-    'w': "BUTTON_MAIN51", # up
-    'a': "BUTTON_MAIN05", # left
-    's': "BUTTON_MAIN50", # down
-    'd': "BUTTON_MAIN15", # right
-    'j': "BUTTON_A",      # attack
-    'k': "BUTTON_B",      # special
-    'l': "BUTTON_L",      # shield
-    'i': "BUTTON_X",      # jump
-    ';': "BUTTON_Z",      # grab
-    ',': "BUTTON_D_UP",   # taunt
-    'r': "BUTTON_C51",    # up smash
-    'f': "BUTTON_C05",    # left smash
-    'g': "BUTTON_C50",    # down smash
-    'h': "BUTTON_C15",    # right smash
+    'w': "BUTTON_MAIN(0.5, 1.0)", # up
+    'a': "BUTTON_MAIN(0.0, 0.5)", # left
+    's': "BUTTON_MAIN(0.5, 0.0)", # down
+    'd': "BUTTON_MAIN(1.0, 0.5)", # right
+    'j': "BUTTON_A",              # attack
+    'k': "BUTTON_B",              # special
+    'l': "BUTTON_L",              # shield
+    'i': "BUTTON_X",              # jump
+    ';': "BUTTON_Z",              # grab
+    '1': "BUTTON_D_LEFT",         # taunt
+    '2': "BUTTON_D_DOWN",         # taunt
+    '3': "BUTTON_D_UP",           # taunt
+    '4': "BUTTON_D_RIGHT",        # taunt
+    't': "BUTTON_C(0.5, 1.0)",    # up smash
+    'f': "BUTTON_C(0.0, 0.5)",    # left smash
+    'g': "BUTTON_C(0.5, 0.0)",    # down smash
+    'h': "BUTTON_C(1.0, 0.5)",    # right smash
 }
 
 def action_from_keys(keys):
@@ -541,9 +564,9 @@ def process_released():
 
 def complement(action):
     if "MAIN" in actions_list[action]:
-        return get_action("BUTTON_MAIN55") # idk
+        return get_action("BUTTON_MAIN(0.5, 0.5)")
     elif "BUTTON_C" in actions_list[action]:
-        return get_action("BUTTON_C55") # idk
+        return get_action("BUTTON_C(0.5, 0.5)")
     elif actions_list[action] == "ZERO":
         return get_action("ZERO")
     else:
@@ -574,32 +597,41 @@ if __name__ == "__main__":
     obs = ssbm_env.reset()
 
     done = False
-    
-    while not done:
-        # Perform first part of upsmash
-        joint_action = {}
-        if args.human:
-                if keys_released:
-                    action = process_released()
-                elif keys_pressed:
-                    action = process_pressed()
-                else:
-                    action = 0
-                joint_action['ai_1'] = action
-        else:
-            joint_action['ai_1'] = 68
-        if not args.cpu:
-            joint_action['ai_2'] = 0
-        obs, reward, done, info = ssbm_env.step(joint_action)
-        done = done['__all__']
+    try:
+        while not done:
+            # Perform first part of upsmash
+            joint_action = {}
+            if args.human:
+                    if keys_released:
+                        action = process_released()
+                    elif keys_pressed:
+                        action = process_pressed()
+                    else:
+                        action = 0
+                    joint_action['ai_1'] = action
+            else:
+                joint_action['ai_1'] = 68
+            if not args.cpu:
+                joint_action['ai_2'] = 0
+            obs, reward, done, info = ssbm_env.step(joint_action)
+            done = done['__all__']
 
-        if not args.human:
-            # Perform second part of upsmash
-            joint_action = {'ai_1': 65}
-            if not done:
-                if not args.cpu:
-                    joint_action['ai_2'] = 0
-                obs, reward, done, info = ssbm_env.step(joint_action)
-                done = done['__all__']
-        
-    ssbm_env.dump_state() # dump the log. normally done w/env.reset()
+            if not args.human:
+                # Perform second part of upsmash
+                joint_action = {'ai_1': 65}
+                if not done:
+                    if not args.cpu:
+                        joint_action['ai_2'] = 0
+                    obs, reward, done, info = ssbm_env.step(joint_action)
+                    done = done['__all__']
+    except KeyboardInterrupt as e:
+        if args.dump_states:
+            print("Got Ctrl-C, dumping state...")
+            ssbm_env.dump_state()
+            print("State dumped, re-raising exception.")
+            raise(e)
+        else:
+            raise(e)
+    if args.dump_states:
+        print("Exited normally, dumping state...")
+        ssbm_env.dump_state()
