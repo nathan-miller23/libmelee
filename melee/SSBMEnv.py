@@ -21,8 +21,6 @@ OP_PORT=2
 CONNECT_CODE=""
 
 # TODO: allow increasable bot difficulty
-# FIXME: getting error that gym has no env attr
-# FIXME: configparser.NoSectionError: No section: 'Core' how did we fix this earlier?
 """
 BUTTON_A = "A"
 BUTTON_B = "B"
@@ -51,8 +49,9 @@ Observation space: [p1_char, p1_x, p1_y, p1_percent, p1_shield, p1_facing, p1_ac
 buttons = [enums.Button.BUTTON_A, enums.Button.BUTTON_B, enums.Button.BUTTON_X, enums.Button.BUTTON_Y, enums.Button.BUTTON_Z,
                enums.Button.BUTTON_L, enums.Button.BUTTON_R, enums.Button.BUTTON_D_UP, enums.Button.BUTTON_D_DOWN, enums.Button.BUTTON_D_LEFT,
                enums.Button.BUTTON_D_RIGHT]
-intervals = [(0, 0), (0.5, 0), (0, 0.5), (1, 0), (0.5, 0.5), (0, 1), (1, 0.5), (0.5, 1), (1, 1)]
-
+intervals = [(0, 0), (0, 0.25), (0.25, 0.25), (0.5, 0.25), (0.75, 0.25), (1, 0.25), (0.25, 0.5), (0.25, 0.75), (0.25, 1), (0, 0.75), 
+             (0.5, 0.75), (0.75, 0.75), (1, 0.75), (0.75, 0), (0.75, 0.5), (0.5, 0), (0.75, 1), (0, 0.5), (1, 0), (0.5, 0.5), (0, 1), 
+             (1, 0.5), (0.5, 1), (1, 1)]
 
 class SSBMEnv(MultiAgentEnv):
     DOLPHIN_SHUTDOWN_TIME = 5
@@ -117,7 +116,7 @@ class SSBMEnv(MultiAgentEnv):
         self.statedump_n = 0
 
         self.get_reward = self._default_get_reward if not self.reward_func else self.reward_func
-        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(39,), dtype=np.float32)
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(69,), dtype=np.float32)
         self.num_actions = (len(buttons) + len(intervals))*2 # num actions *2 for press/release and both joysticks
         self.action_space = spaces.Discrete(self.num_actions+1) # plus one for nop
 
@@ -195,17 +194,45 @@ class SSBMEnv(MultiAgentEnv):
         p1_state = np.array([p1.character.value, p1.x, p1.y, p1.percent, p1.shield_strength, p1.facing, p1.action.value, p1.action_frame,
                              float(p1.invulnerable), p1.invulnerability_left, float(p1.hitlag), p1.hitstun_frames_left, p1.jumps_left,
                              float(p1.on_ground), p1.speed_air_x_self, p1.speed_y_self, p1.speed_x_attack, p1.speed_y_attack, p1.speed_ground_x_self,
+                             float(p1.controller_state.button[enums.Button.BUTTON_A]), float(p1.controller_state.button[enums.Button.BUTTON_B]),
+                             float(p1.controller_state.button[enums.Button.BUTTON_X]), float(p1.controller_state.button[enums.Button.BUTTON_Y]),
+                             float(p1.controller_state.button[enums.Button.BUTTON_Z]), float(p1.controller_state.button[enums.Button.BUTTON_L]),
+                             float(p1.controller_state.button[enums.Button.BUTTON_R]), float(p1.controller_state.button[enums.Button.BUTTON_D_UP]),
+                             float(p1.controller_state.button[enums.Button.BUTTON_D_DOWN]), float(p1.controller_state.button[enums.Button.BUTTON_D_LEFT]),
+                             float(p1.controller_state.button[enums.Button.BUTTON_D_RIGHT]), p1.controller_state.main_stick[0], p1.controller_state.main_stick[1],
+                             p1.controller_state.c_stick[0], p1.controller_state.c_stick[1],
                              self.gamestate.distance, p2.character.value, p2.x, p2.y, p2.percent, p2.shield_strength, p2.facing, p2.action.value, p2.action_frame,
                              float(p2.invulnerable), p2.invulnerability_left, float(p2.hitlag), p2.hitstun_frames_left, p2.jumps_left,
-                             float(p2.on_ground), p2.speed_air_x_self, p2.speed_y_self, p2.speed_x_attack, p2.speed_y_attack, p2.speed_ground_x_self])
+                             float(p2.on_ground), p2.speed_air_x_self, p2.speed_y_self, p2.speed_x_attack, p2.speed_y_attack, p2.speed_ground_x_self,
+                             float(p2.controller_state.button[enums.Button.BUTTON_A]), float(p2.controller_state.button[enums.Button.BUTTON_B]),
+                             float(p2.controller_state.button[enums.Button.BUTTON_X]), float(p2.controller_state.button[enums.Button.BUTTON_Y]),
+                             float(p2.controller_state.button[enums.Button.BUTTON_Z]), float(p2.controller_state.button[enums.Button.BUTTON_L]),
+                             float(p2.controller_state.button[enums.Button.BUTTON_R]), float(p2.controller_state.button[enums.Button.BUTTON_D_UP]),
+                             float(p2.controller_state.button[enums.Button.BUTTON_D_DOWN]), float(p2.controller_state.button[enums.Button.BUTTON_D_LEFT]),
+                             float(p2.controller_state.button[enums.Button.BUTTON_D_RIGHT]), p2.controller_state.main_stick[0], p2.controller_state.main_stick[1],
+                             p2.controller_state.c_stick[0], p2.controller_state.c_stick[1]])
         p1, p2 = p2, p1
 
         p2_state = np.array([p1.character.value, p1.x, p1.y, p1.percent, p1.shield_strength, p1.facing, p1.action.value, p1.action_frame,
                              float(p1.invulnerable), p1.invulnerability_left, float(p1.hitlag), p1.hitstun_frames_left, p1.jumps_left,
                              float(p1.on_ground), p1.speed_air_x_self, p1.speed_y_self, p1.speed_x_attack, p1.speed_y_attack, p1.speed_ground_x_self,
+                             float(p1.controller_state.button[enums.Button.BUTTON_A]), float(p1.controller_state.button[enums.Button.BUTTON_B]),
+                             float(p1.controller_state.button[enums.Button.BUTTON_X]), float(p1.controller_state.button[enums.Button.BUTTON_Y]),
+                             float(p1.controller_state.button[enums.Button.BUTTON_Z]), float(p1.controller_state.button[enums.Button.BUTTON_L]),
+                             float(p1.controller_state.button[enums.Button.BUTTON_R]), float(p1.controller_state.button[enums.Button.BUTTON_D_UP]),
+                             float(p1.controller_state.button[enums.Button.BUTTON_D_DOWN]), float(p1.controller_state.button[enums.Button.BUTTON_D_LEFT]),
+                             float(p1.controller_state.button[enums.Button.BUTTON_D_RIGHT]), p1.controller_state.main_stick[0], p1.controller_state.main_stick[1],
+                             p1.controller_state.c_stick[0], p1.controller_state.c_stick[1],
                              self.gamestate.distance, p2.character.value, p2.x, p2.y, p2.percent, p2.shield_strength, p2.facing, p2.action.value, p2.action_frame,
                              float(p2.invulnerable), p2.invulnerability_left, float(p2.hitlag), p2.hitstun_frames_left, p2.jumps_left,
-                             float(p2.on_ground), p2.speed_air_x_self, p2.speed_y_self, p2.speed_x_attack, p2.speed_y_attack, p2.speed_ground_x_self])
+                             float(p2.on_ground), p2.speed_air_x_self, p2.speed_y_self, p2.speed_x_attack, p2.speed_y_attack, p2.speed_ground_x_self,
+                             float(p2.controller_state.button[enums.Button.BUTTON_A]), float(p2.controller_state.button[enums.Button.BUTTON_B]),
+                             float(p2.controller_state.button[enums.Button.BUTTON_X]), float(p2.controller_state.button[enums.Button.BUTTON_Y]),
+                             float(p2.controller_state.button[enums.Button.BUTTON_Z]), float(p2.controller_state.button[enums.Button.BUTTON_L]),
+                             float(p2.controller_state.button[enums.Button.BUTTON_R]), float(p2.controller_state.button[enums.Button.BUTTON_D_UP]),
+                             float(p2.controller_state.button[enums.Button.BUTTON_D_DOWN]), float(p2.controller_state.button[enums.Button.BUTTON_D_LEFT]),
+                             float(p2.controller_state.button[enums.Button.BUTTON_D_RIGHT]), p2.controller_state.main_stick[0], p2.controller_state.main_stick[1],
+                             p2.controller_state.c_stick[0], p2.controller_state.c_stick[1]])
 
         observations = [p1_state, p2_state]
         obs_dict = { agent_name : observations[i] for i, agent_name in enumerate(self.agents) }
@@ -358,7 +385,7 @@ class SSBMEnv(MultiAgentEnv):
 
         if done['__all__']:
             self._stop_dolphin()
-
+        print(state)
         return state, reward, done, info
     
     def state_np_to_list(self, dictionary):
@@ -518,7 +545,7 @@ if __name__ == "__main__":
                     action = 0
                 joint_action['ai_1'] = action
         else:
-            joint_action['ai_1'] = 35
+            joint_action['ai_1'] = 68
         if not args.cpu:
             joint_action['ai_2'] = 0
         obs, reward, done, info = ssbm_env.step(joint_action)
@@ -526,7 +553,7 @@ if __name__ == "__main__":
 
         if not args.human:
             # Perform second part of upsmash
-            joint_action = {'ai_1': 31}
+            joint_action = {'ai_1': 65}
             if not done:
                 if not args.cpu:
                     joint_action['ai_2'] = 0
