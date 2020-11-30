@@ -67,7 +67,7 @@ class SSBMEnv(MultiAgentEnv):
     Attr:
         - self.logger: log useful data in csv
         - self.console: console to communicate with slippi dolphin
-        - self.symmetric: False if one agent is bot
+        - self.cpu: True if one agent is bot
         - self.ctrlr: controller for char1
         - self.ctrlr_op: controller for char2 (could be cpu bot)
         -
@@ -77,16 +77,18 @@ class SSBMEnv(MultiAgentEnv):
         - ssbm_iso_path: path to ssbm iso
         - char1, char2: melee.Character enum
         - stage: where we playin?
-        - symmetric: True if we are training policies for both char1 and char2
+        - cpu: False if we are training policies for both char1 and char2
                      else char2 is cpu bot
-        - cpu_level: if symmetric=False this is the level of the cpu
+        - cpu_level: if cpu=True this is the level of the cpu
         - log: are we logging stuff?
         - reward_func: custom reward function should take two gamestate objects as input and output a tuple
                        containing the reward for the player and opponent
-        - statedump_prefix: every reset, save the past history as JSON
+        - dump_states (bool): If True, every reset, save the past history as JSON
           array of dict {'state': state, agent_name: agent_action ... }
-          to the file {statedump_prefix}_{n}.txt where n starts at 1 and
-          increments every reset.
+          to the file {statedump_dir}/{statedump_prefix}_{n}.txt where n starts at 1 and
+          increments every reset. Only dump if self.dump_states is True
+        - statedump_dir (path): Directory to store states, if dump_states is set
+        - statedump_prefiex (str): File prefix for statedumps
         - kill_reward: (int) Reward an agents gets (loses) for each kill (death) in default reward function
         - aggro_coeff: (float): Relative weight of damage given to damage taken in potential function. >1 encourages more aggressive agents
         - gamma (float): Discount factor
@@ -96,7 +98,7 @@ class SSBMEnv(MultiAgentEnv):
         - dolphin_timeout (int): Number of seconds after which we consider a dolphin startup failed
     """
     def __init__(self, dolphin_exe_path, ssbm_iso_path, char1=melee.Character.FOX, char2=melee.Character.FALCO,
-                stage=melee.Stage.FINAL_DESTINATION, symmetric=False, cpu_level=1, log=False, reward_func=None, kill_reward=200, aggro_coeff=1, gamma=0.99, shaping_coeff=1, off_stage_weight=10, num_dolphin_retries=3, dolphin_timeout=20, statedump_prefix=None, **kwargs):
+                stage=melee.Stage.FINAL_DESTINATION, cpu=False, cpu_level=1, log=False, reward_func=None, kill_reward=200, aggro_coeff=1, gamma=0.99, shaping_coeff=1, off_stage_weight=10, num_dolphin_retries=3, dolphin_timeout=20, dump_states=False, statedump_dir=os.path.abspath('.'), statedump_prefix="ssbm_out", **kwargs):
         ### Args checking ###
 
         # Paths
@@ -140,7 +142,7 @@ class SSBMEnv(MultiAgentEnv):
         self.char1 = char1
         self.char2 = char2
         self.stage = stage
-        self.symmetric = symmetric
+        self.cpu = cpu
         self.cpu_level = cpu_level
         self.reward_func = reward_func
         self.logger = melee.Logger()
@@ -154,8 +156,11 @@ class SSBMEnv(MultiAgentEnv):
         self.num_dolphin_retries = num_dolphin_retries
         self.dolphin_timeout = dolphin_timeout
         self._is_dolphin_running = False
+        self.dump_states = dump_states
+        self.statedump_dir = statedump_dir
         self.statedump_prefix = statedump_prefix
         self.statedump_n = 0
+        self.state_data = []
 
         # Space creation
         self.get_reward = self._default_get_reward if not self.reward_func else self.reward_func
@@ -257,7 +262,6 @@ class SSBMEnv(MultiAgentEnv):
                               float(p2.invulnerable), p2.invulnerability_left, float(p2.hitlag), p2.hitstun_frames_left, p2.jumps_left,
                               float(p2.on_ground), p2.speed_air_x_self, p2.speed_y_self, p2.speed_x_attack, p2.speed_y_attack, p2.speed_ground_x_self,
                               float(p2.off_stage), p2.moonwalkwarning, *p2.ecb_right, *p2.ecb_left, *p2.ecb_top, *p2.ecb_bottom]
-        print(p2.action.value)
 
         # All agent-centric info
         p1_state = [*p1_controller_state, *p1_character_state]
@@ -342,7 +346,7 @@ class SSBMEnv(MultiAgentEnv):
                                         connect_code=CONNECT_CODE,
                                         autostart=True,
                                         swag=False,
-                                        make_cpu=not self.symmetric,
+                                        make_cpu=self.cpu,
                                         level=self.cpu_level)
 
         while self.gamestate.menu_state not in [melee.Menu.IN_GAME, melee.Menu.SUDDEN_DEATH]:
@@ -391,22 +395,30 @@ class SSBMEnv(MultiAgentEnv):
             raise RuntimeError("Controller port inconsistency!")
 
         prev_gamestate = self.gamestate
-        self.state_data.append({'state': self._get_state()})
+
         # perform actions
         for agent_idx, agent in enumerate(self.agents):
             action = joint_action[agent]
-            self.state_data[-1][agent] = action
-            self._perform_action(agent_idx, action)
+            self._perform_action(agent_idx, action)      
 
         # step env
         self.gamestate = self.console.step()
-        # collect reward
+        
+        # Collect all transition data
         reward = self.get_reward(prev_gamestate, self.gamestate)
         state = self._get_state()
-        self.state_data[-1]['next_state'] = state
-        # determine if game is over and write extra info
         done = self._get_done()
         info = self._get_info()
+
+        # Log (s_t, a_t, s'_t) data if necessary
+        if self.dump_states:
+            # Log a_t
+            for agent in self.agents:
+                self.state_data[-1][agent] = joint_action[agent]
+            # Log s'_t
+            self.state_data[-1]['next_state'] = state
+            # Log s_{t+1}
+            self.state_data.append({ "state" : state })
 
         if self.gamestate.menu_state != melee.enums.Menu.IN_GAME:
             for key, _  in done.items():
@@ -428,12 +440,11 @@ class SSBMEnv(MultiAgentEnv):
                 self.state_np_to_list(dictionary[entry])
     
     def dump_state(self):
-        if self.statedump_prefix is not None:
-            if self.statedump_n > 0:
-                with open(f"./{self.statedump_prefix}_{self.statedump_n}.txt", "w") as f:
-                    for entry in self.state_data:
-                        self.state_np_to_list(entry)
-                    f.write(json.dumps(self.state_data))
+        if self.dump_states and self.state_data:
+            with open(os.path.join(self.statedump_dir, f"{self.statedump_prefix}_{self.statedump_n}.txt"), "w") as f:
+                for entry in self.state_data:
+                    self.state_np_to_list(entry)
+                f.write(json.dumps(self.state_data))
             self.statedump_n += 1
         self.state_data = []
 
@@ -442,7 +453,7 @@ class SSBMEnv(MultiAgentEnv):
         # hashtag JustDolphinThings
         self.start_game()
 
-        if self.symmetric:
+        if not self.cpu:
             self.agents = ['ai_1', 'ai_2']
         else:
             self.agents = ['ai_1']
@@ -455,6 +466,9 @@ class SSBMEnv(MultiAgentEnv):
 
         # Return initial observation
         joint_obs = self._get_state()
+
+        if self.dump_states:
+            self.state_data.append({ "state" : joint_obs })
         return joint_obs
 
     
@@ -539,22 +553,24 @@ if __name__ == "__main__":
     import time
     import argparse
     parser = argparse.ArgumentParser(description='Example of Gym Wrapper in action')
-    parser.add_argument('--dolphin_executable_path', '-e', default=None,
+    parser.add_argument('--dolphin_exe_path', '-e', default=None,
                         help='The directory where dolphin is')
-    parser.add_argument('--iso_path', '-i', default="~/SSMB.iso",
+    parser.add_argument('--ssbm_iso_path', '-i', default="~/SSMB.iso",
                         help='Full path to Melee ISO file')
     parser.add_argument('--cpu', '-c', action='store_true',
                         help='Whether to set oponent as CPU')
     parser.add_argument('--cpu_level', '-l', type=int, default=3,
                         help='Level of CPU. Only valid if cpu is true')
     parser.add_argument('--human', '-m', action='store_true', help='P1 Human')
-    parser.add_argument('--statedump', '-s', help='where to dump states to')
-
+    parser.add_argument('--dump_states', '-s', action='store_true', help='Should we log state-action pairs?')
+    parser.add_argument('--statedump_dir', '-sd', type=str, default=os.path.abspath('.'), help='where to dump states to')
+    parser.add_argument('--statedump_prefix', '-sp', type=str, default='out', help='file prefix for state dumps')
+    
     args = parser.parse_args()
     
     pynput.keyboard.Listener(on_press=on_press, on_release=on_release).start()
 
-    ssbm_env = SSBMEnv(args.dolphin_executable_path, args.iso_path, symmetric=not args.cpu, cpu_level=args.cpu_level, statedump_prefix=args.statedump, log=True)
+    ssbm_env = SSBMEnv(**vars(args))
     obs = ssbm_env.reset()
 
     done = False
