@@ -1,4 +1,4 @@
-import gym, melee, sys, signal, time
+import gym, melee, sys, signal, time, os
 from ray.rllib.env import MultiAgentEnv
 from gym import error, spaces, utils
 from gym.utils import seeding
@@ -7,6 +7,7 @@ from melee import enums
 import pynput
 import json
 from melee.utils import Timeout
+from itertools import product
 
 """
 Gym compatible env for libmelee (an RL framework for SSBM)
@@ -46,15 +47,18 @@ Observation space: [p1_char, p1_x, p1_y, p1_percent, p1_shield, p1_facing, p1_ac
                     p1_speed_y_self, p1_speed_x_attack, p1_speed_y_attack, p1_speed_ground_x_self, distance_btw_players, ...p2 same attr...]
 """
 
-buttons = [enums.Button.BUTTON_A, enums.Button.BUTTON_B, enums.Button.BUTTON_X, enums.Button.BUTTON_Y, enums.Button.BUTTON_Z,
+buttons = [enums.Button.BUTTON_A, enums.Button.BUTTON_B, enums.Button.BUTTON_X, enums.Button.BUTTON_Z,
                enums.Button.BUTTON_L, enums.Button.BUTTON_R, enums.Button.BUTTON_D_UP, enums.Button.BUTTON_D_DOWN, enums.Button.BUTTON_D_LEFT,
                enums.Button.BUTTON_D_RIGHT]
-intervals = [(0, 0), (0, 0.25), (0.25, 0.25), (0.5, 0.25), (0.75, 0.25), (1, 0.25), (0.25, 0.5), (0.25, 0.75), (0.25, 1), (0, 0.75), 
-             (0.5, 0.75), (0.75, 0.75), (1, 0.75), (0.75, 0), (0.75, 0.5), (0.5, 0), (0.75, 1), (0, 0.5), (1, 0), (0.5, 0.5), (0, 1), 
-             (1, 0.5), (0.5, 1), (1, 1)]
+
+tilt_bins = [0.0, 0.25, 0.5, 0.75, 1.0]
+intervals = list(product(tilt_bins, repeat=2))
 
 class SSBMEnv(MultiAgentEnv):
-    DOLPHIN_SHUTDOWN_TIME = 5
+    DOLPHIN_SHUTDOWN_TIME = 5 # number of seconds we wait for dolphin process shutdown before restarting
+    NUM_ACTIONS = (len(buttons) + len(intervals))*2 # num actions *2 for press/release and both joysticks
+    OBSERVATION_DIM = 87
+
 
 
     """
@@ -93,6 +97,44 @@ class SSBMEnv(MultiAgentEnv):
     """
     def __init__(self, dolphin_exe_path, ssbm_iso_path, char1=melee.Character.FOX, char2=melee.Character.FALCO,
                 stage=melee.Stage.FINAL_DESTINATION, symmetric=False, cpu_level=1, log=False, reward_func=None, kill_reward=200, aggro_coeff=1, gamma=0.99, shaping_coeff=1, off_stage_weight=10, num_dolphin_retries=3, dolphin_timeout=20, statedump_prefix=None, **kwargs):
+        ### Args checking ###
+
+        # Paths
+        if not os.path.exists(dolphin_exe_path) or not os.path.isdir(dolphin_exe_path):
+            raise ValueError("dolphin exe path {} is not a valid path to the executable directory!".format(dolphin_exe_path))
+        if not os.path.exists(ssbm_iso_path) or not os.path.isfile(ssbm_iso_path):
+            raise ValueError("ssbm_iso_path {} is not a valid path to an ISO file!".format(ssbm_iso_path))
+        # constants 
+        if dolphin_timeout < 0 or dolphin_timeout > 100:
+            raise ValueError("Dolphin_timeout must be an in [0, 100]")
+        if not type(num_dolphin_retries) == int or num_dolphin_retries < 0 or num_dolphin_retries > 5:
+            raise ValueError("num_dolphin_retries must be an int in [0, 5]")
+        if not type(cpu_level) == int or cpu_level < 1 or cpu_level > 9:
+            raise ValueError("cpu_level must be an int in [1, 9]")
+        # Enums
+        try:
+            is_valid = char1 in melee.Character
+        except:
+            raise ValueError("{} is not a valid character!".format(char1))
+        else:
+            if not is_valid:
+                raise ValueError("{} is not a valid character!".format(char1))
+        try:
+            is_valid = char2 in melee.Character
+        except:
+            raise ValueError("{} is not a valid character!".format(char2))
+        else:
+            if not is_valid:
+                raise ValueError("{} is not a valid character!".format(char2))
+        try:
+            is_valid = stage in melee.Stage
+        except:
+            raise ValueError("{} is not a valid character!".format(stage))
+        else:
+            if not is_valid:
+                raise ValueError("{} is not a valid character!".format(stage))
+        
+        # Assign instance variables
         self.dolphin_exe_path = dolphin_exe_path
         self.ssbm_iso_path = ssbm_iso_path
         self.char1 = char1
@@ -107,18 +149,18 @@ class SSBMEnv(MultiAgentEnv):
         self.gamma = gamma
         self.kill_reward = kill_reward
         self.aggro_coeff = aggro_coeff
-        self.shaping_coeff = 1
-        self.off_stage_weight = 10
+        self.shaping_coeff = shaping_coeff
+        self.off_stage_weight = off_stage_weight
         self.num_dolphin_retries = num_dolphin_retries
         self.dolphin_timeout = dolphin_timeout
         self._is_dolphin_running = False
         self.statedump_prefix = statedump_prefix
         self.statedump_n = 0
 
+        # Space creation
         self.get_reward = self._default_get_reward if not self.reward_func else self.reward_func
-        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(69,), dtype=np.float32)
-        self.num_actions = (len(buttons) + len(intervals))*2 # num actions *2 for press/release and both joysticks
-        self.action_space = spaces.Discrete(self.num_actions+1) # plus one for nop
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(self.OBSERVATION_DIM,), dtype=np.float32)
+        self.action_space = spaces.Discrete(self.NUM_ACTIONS+1) # plus one for nop
 
     def _default_get_reward(self, prev_gamestate, gamestate): # define reward function
         sparse_reward = self._get_sparse_reward(prev_gamestate, gamestate)
@@ -191,50 +233,41 @@ class SSBMEnv(MultiAgentEnv):
         # I make the assumption that p1 is *always* a non-cpu and p2 is the cpu, if present
         p1 = self.gamestate.player[self.ctrlr_port]
         p2 = self.gamestate.player[self.ctrlr_op_port]
-        p1_state = np.array([p1.character.value, p1.x, p1.y, p1.percent, p1.shield_strength, p1.facing, p1.action.value, p1.action_frame,
-                             float(p1.invulnerable), p1.invulnerability_left, float(p1.hitlag), p1.hitstun_frames_left, p1.jumps_left,
-                             float(p1.on_ground), p1.speed_air_x_self, p1.speed_y_self, p1.speed_x_attack, p1.speed_y_attack, p1.speed_ground_x_self,
-                             float(p1.controller_state.button[enums.Button.BUTTON_A]), float(p1.controller_state.button[enums.Button.BUTTON_B]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_X]), float(p1.controller_state.button[enums.Button.BUTTON_Y]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_Z]), float(p1.controller_state.button[enums.Button.BUTTON_L]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_R]), float(p1.controller_state.button[enums.Button.BUTTON_D_UP]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_D_DOWN]), float(p1.controller_state.button[enums.Button.BUTTON_D_LEFT]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_D_RIGHT]), p1.controller_state.main_stick[0], p1.controller_state.main_stick[1],
-                             p1.controller_state.c_stick[0], p1.controller_state.c_stick[1],
-                             self.gamestate.distance, p2.character.value, p2.x, p2.y, p2.percent, p2.shield_strength, p2.facing, p2.action.value, p2.action_frame,
-                             float(p2.invulnerable), p2.invulnerability_left, float(p2.hitlag), p2.hitstun_frames_left, p2.jumps_left,
-                             float(p2.on_ground), p2.speed_air_x_self, p2.speed_y_self, p2.speed_x_attack, p2.speed_y_attack, p2.speed_ground_x_self,
-                             float(p2.controller_state.button[enums.Button.BUTTON_A]), float(p2.controller_state.button[enums.Button.BUTTON_B]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_X]), float(p2.controller_state.button[enums.Button.BUTTON_Y]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_Z]), float(p2.controller_state.button[enums.Button.BUTTON_L]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_R]), float(p2.controller_state.button[enums.Button.BUTTON_D_UP]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_D_DOWN]), float(p2.controller_state.button[enums.Button.BUTTON_D_LEFT]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_D_RIGHT]), p2.controller_state.main_stick[0], p2.controller_state.main_stick[1],
-                             p2.controller_state.c_stick[0], p2.controller_state.c_stick[1]])
-        p1, p2 = p2, p1
 
-        p2_state = np.array([p1.character.value, p1.x, p1.y, p1.percent, p1.shield_strength, p1.facing, p1.action.value, p1.action_frame,
-                             float(p1.invulnerable), p1.invulnerability_left, float(p1.hitlag), p1.hitstun_frames_left, p1.jumps_left,
-                             float(p1.on_ground), p1.speed_air_x_self, p1.speed_y_self, p1.speed_x_attack, p1.speed_y_attack, p1.speed_ground_x_self,
-                             float(p1.controller_state.button[enums.Button.BUTTON_A]), float(p1.controller_state.button[enums.Button.BUTTON_B]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_X]), float(p1.controller_state.button[enums.Button.BUTTON_Y]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_Z]), float(p1.controller_state.button[enums.Button.BUTTON_L]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_R]), float(p1.controller_state.button[enums.Button.BUTTON_D_UP]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_D_DOWN]), float(p1.controller_state.button[enums.Button.BUTTON_D_LEFT]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_D_RIGHT]), p1.controller_state.main_stick[0], p1.controller_state.main_stick[1],
-                             p1.controller_state.c_stick[0], p1.controller_state.c_stick[1],
-                             self.gamestate.distance, p2.character.value, p2.x, p2.y, p2.percent, p2.shield_strength, p2.facing, p2.action.value, p2.action_frame,
-                             float(p2.invulnerable), p2.invulnerability_left, float(p2.hitlag), p2.hitstun_frames_left, p2.jumps_left,
-                             float(p2.on_ground), p2.speed_air_x_self, p2.speed_y_self, p2.speed_x_attack, p2.speed_y_attack, p2.speed_ground_x_self,
-                             float(p2.controller_state.button[enums.Button.BUTTON_A]), float(p2.controller_state.button[enums.Button.BUTTON_B]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_X]), float(p2.controller_state.button[enums.Button.BUTTON_Y]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_Z]), float(p2.controller_state.button[enums.Button.BUTTON_L]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_R]), float(p2.controller_state.button[enums.Button.BUTTON_D_UP]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_D_DOWN]), float(p2.controller_state.button[enums.Button.BUTTON_D_LEFT]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_D_RIGHT]), p2.controller_state.main_stick[0], p2.controller_state.main_stick[1],
-                             p2.controller_state.c_stick[0], p2.controller_state.c_stick[1]])
+        # What buttons are pressed (or not)
+        p1_button_state = [float(p1.controller_state.button[btn]) for btn in buttons]
+        p2_button_state = [float(p2.controller_state.button[btn]) for btn in buttons]
 
-        observations = [p1_state, p2_state]
+        # Position of joysticks
+        p1_stick_state = [p1.controller_state.main_stick[0], p1.controller_state.main_stick[1], 
+                          p1.controller_state.c_stick[0], p1.controller_state.c_stick[1]]
+        p2_stick_state = [p2.controller_state.main_stick[0], p2.controller_state.main_stick[1], 
+                          p2.controller_state.c_stick[0], p2.controller_state.c_stick[1]]
+
+        # All controller info
+        p1_controller_state = [*p1_button_state, *p1_stick_state]
+        p2_controller_state = [*p2_button_state, *p2_stick_state]
+
+        # All character-centric info
+        p1_character_state = [p1.character.value, p1.x, p1.y, p1.percent, p1.shield_strength, p1.facing, p1.action.value, p1.action_frame,
+                              float(p1.invulnerable), p1.invulnerability_left, float(p1.hitlag), p1.hitstun_frames_left, p1.jumps_left,
+                              float(p1.on_ground), p1.speed_air_x_self, p1.speed_y_self, p1.speed_x_attack, p1.speed_y_attack, p1.speed_ground_x_self,
+                              float(p1.off_stage), p1.moonwalkwarning, *p1.ecb_right, *p1.ecb_left, *p1.ecb_top, *p1.ecb_bottom]
+        p2_character_state = [p2.character.value, p2.x, p2.y, p2.percent, p2.shield_strength, p2.facing, p2.action.value, p2.action_frame,
+                              float(p2.invulnerable), p2.invulnerability_left, float(p2.hitlag), p2.hitstun_frames_left, p2.jumps_left,
+                              float(p2.on_ground), p2.speed_air_x_self, p2.speed_y_self, p2.speed_x_attack, p2.speed_y_attack, p2.speed_ground_x_self,
+                              float(p2.off_stage), p2.moonwalkwarning, *p2.ecb_right, *p2.ecb_left, *p2.ecb_top, *p2.ecb_bottom]
+        print(p2.action.value)
+
+        # All agent-centric info
+        p1_state = [*p1_controller_state, *p1_character_state]
+        p2_state = [*p2_controller_state, *p2_character_state]
+
+        # Final observations (note they're symmetrically encoded so that 'my' state always comes first)
+        p1_obs = np.array([*p1_state, self.gamestate.distance, *p2_state])
+        p2_obs = np.array([*p2_state, self.gamestate.distance, *p1_state])
+
+        observations = [p1_obs, p2_obs]
         obs_dict = { agent_name : observations[i] for i, agent_name in enumerate(self.agents) }
 
         return obs_dict
@@ -275,7 +308,6 @@ class SSBMEnv(MultiAgentEnv):
                                     blocking_input=False,
                                     polling_mode=False,
                                     logger=self.logger)
-        self.symmetric = self.symmetric
         self.ctrlr = melee.Controller(console=self.console,
                                     port=PLAYER_PORT,
                                     type=melee.ControllerType.STANDARD)
@@ -385,7 +417,7 @@ class SSBMEnv(MultiAgentEnv):
 
         if done['__all__']:
             self._stop_dolphin()
-        print(state)
+        
         return state, reward, done, info
     
     def state_np_to_list(self, dictionary):
@@ -404,12 +436,6 @@ class SSBMEnv(MultiAgentEnv):
                     f.write(json.dumps(self.state_data))
             self.statedump_n += 1
         self.state_data = []
-
-    def reset(self):    # TODO: should reset state to initial state, how to do this?
-        self.dump_state()
-        
-        if self._is_dolphin_running:
-            self._stop_dolphin()
 
     def reset(self):    # TODO: should reset state to initial state, how to do this?
         self.dump_state()
