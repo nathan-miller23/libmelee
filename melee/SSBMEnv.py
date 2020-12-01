@@ -442,6 +442,8 @@ class SSBMEnv(MultiAgentEnv):
             for key, _ in done.items():
                 done[key] = False
 
+        all_done = done['__all__']
+
         if all_done:
             self._stop_dolphin()
         
