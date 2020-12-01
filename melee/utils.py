@@ -20,15 +20,13 @@ class Timeout(object):
     def __call__(self, *args, **kwargs):
         timer = threading.Timer(self.s, quit_function, args=[self.func.__name__])
         timer.start()
-        ret = False
         try:
             self.func(*args, **kwargs)
-            ret = True
+            return True
         except TimeoutException:
-            ret = False
+            return False
         finally:
             timer.cancel()
-            return ret
 
     def __get__(self, instance, owner):
         from functools import partial

@@ -1,4 +1,4 @@
-import gym, melee, sys, signal, time
+import gym, melee, sys, signal, time, os
 from ray.rllib.env import MultiAgentEnv
 from gym import error, spaces, utils
 from gym.utils import seeding
@@ -7,6 +7,7 @@ from melee import enums
 import pynput
 import json
 from melee.utils import Timeout
+from itertools import product
 
 """
 Gym compatible env for libmelee (an RL framework for SSBM)
@@ -37,24 +38,38 @@ BUTTON_D_RIGHT = "D_RIGHT"
 #Control sticks considered "buttons" here
 BUTTON_MAIN = "MAIN"
 BUTTON_C = "C"
-Action space: [BUTTON_A, BUTTON_B, BUTTON_X, BUTTON_Y, BUTTON_Z, BUTTON_L, BUTTON_R, BUTTON_D_UP, BUTTON_D_DOWN, BUTTON_D_LEFT, BUTTON_D_RIGHT,
-                BUTTON_A_R, BUTTON_B_R, BUTTON_X_R, BUTTON_Y_R, BUTTON_Z_R, BUTTON_L_R, BUTTON_R_R, BUTTON_D_UP_R, BUTTON_D_DOWN_R, BUTTON_D_LEFT_R, BUTTON_D_RIGHT_R,
-                BUTTON_MAIN (0, 0), BUTTON_MAIN (0.5, 0), BUTTON_MAIN (0, 0.5), BUTTON_MAIN (1, 0), BUTTON_MAIN (0, 1), BUTTON_MAIN (1, 0.5), BUTTON_MAIN (0.5, 1), BUTTON_MAIN (1, 1),
-                BUTTON_C (0, 0), BUTTON_C (0.5, 0), BUTTON_C (0, 0.5), BUTTON_C (1, 0), BUTTON_C (0, 1), BUTTON_C (1, 0.5), BUTTON_C (0.5, 1), BUTTON_C (1, 1)]
+Action space: [BUTTON_A, BUTTON_B, BUTTON_X, BUTTON_Z,
+               BUTTON_L, BUTTON_R, BUTTON_D_UP, BUTTON_D_DOWN,
+               BUTTON_D_LEFT, BUTTON_D_RIGHT, BUTTON_A_R, BUTTON_B_R,
+               BUTTON_X_R, BUTTON_Z_R, BUTTON_L_R,
+               BUTTON_R_R, BUTTON_D_UP_R, BUTTON_D_DOWN_R,
+               BUTTON_D_LEFT_R, BUTTON_D_RIGHT_R,
+               BUTTON_MAIN ..., BUTTON_C ...]
 
-Observation space: [p1_char, p1_x, p1_y, p1_percent, p1_shield, p1_facing, p1_action_enum_value, p1_action_frame, p1_invulnerable, p1_invulnerable_left, p1_hitlag, p1_hitstun_frames_left, p1_jumps_left, p1_on_ground, p1_speed_air_x_self,
-                    p1_speed_y_self, p1_speed_x_attack, p1_speed_y_attack, p1_speed_ground_x_self, distance_btw_players, ...p2 same attr...]
+Observation space: [p1_char, p1_x, p1_y, p1_percent, p1_shield,
+                    p1_facing, p1_action_enum_value, p1_action_frame,
+                    p1_invulnerable, p1_invulnerable_left, p1_hitlag,
+                    p1_hitstun_frames_left, p1_jumps_left, p1_on_ground,
+                    p1_speed_air_x_self, p1_speed_y_self,
+                    p1_speed_x_attack, p1_speed_y_attack,
+                    p1_speed_ground_x_self, distance_btw_players,
+                    ...p2 same attr...]
 """
 
-buttons = [enums.Button.BUTTON_A, enums.Button.BUTTON_B, enums.Button.BUTTON_X, enums.Button.BUTTON_Y, enums.Button.BUTTON_Z,
-               enums.Button.BUTTON_L, enums.Button.BUTTON_R, enums.Button.BUTTON_D_UP, enums.Button.BUTTON_D_DOWN, enums.Button.BUTTON_D_LEFT,
-               enums.Button.BUTTON_D_RIGHT]
-intervals = [(0, 0), (0, 0.25), (0.25, 0.25), (0.5, 0.25), (0.75, 0.25), (1, 0.25), (0.25, 0.5), (0.25, 0.75), (0.25, 1), (0, 0.75), 
-             (0.5, 0.75), (0.75, 0.75), (1, 0.75), (0.75, 0), (0.75, 0.5), (0.5, 0), (0.75, 1), (0, 0.5), (1, 0), (0.5, 0.5), (0, 1), 
-             (1, 0.5), (0.5, 1), (1, 1)]
+buttons = [enums.Button.BUTTON_A, enums.Button.BUTTON_B,
+           enums.Button.BUTTON_X, enums.Button.BUTTON_Z,
+           enums.Button.BUTTON_L, enums.Button.BUTTON_R,
+           enums.Button.BUTTON_D_UP, enums.Button.BUTTON_D_DOWN,
+           enums.Button.BUTTON_D_LEFT, enums.Button.BUTTON_D_RIGHT]
+
+tilt_bins = [0.0, 0.25, 0.5, 0.75, 1.0]
+intervals = list(product(tilt_bins, repeat=2))
 
 class SSBMEnv(MultiAgentEnv):
-    DOLPHIN_SHUTDOWN_TIME = 5
+    DOLPHIN_SHUTDOWN_TIME = 5 # number of seconds we wait for dolphin process shutdown before restarting
+    NUM_ACTIONS = (len(buttons) + len(intervals))*2 # num actions *2 for press/release and both joysticks
+    OBSERVATION_DIM = 87
+
 
 
     """
@@ -63,7 +78,7 @@ class SSBMEnv(MultiAgentEnv):
     Attr:
         - self.logger: log useful data in csv
         - self.console: console to communicate with slippi dolphin
-        - self.symmetric: False if one agent is bot
+        - self.cpu: True if one agent is bot
         - self.ctrlr: controller for char1
         - self.ctrlr_op: controller for char2 (could be cpu bot)
         -
@@ -73,16 +88,18 @@ class SSBMEnv(MultiAgentEnv):
         - ssbm_iso_path: path to ssbm iso
         - char1, char2: melee.Character enum
         - stage: where we playin?
-        - symmetric: True if we are training policies for both char1 and char2
+        - cpu: False if we are training policies for both char1 and char2
                      else char2 is cpu bot
-        - cpu_level: if symmetric=False this is the level of the cpu
+        - cpu_level: if cpu=True this is the level of the cpu
         - log: are we logging stuff?
         - reward_func: custom reward function should take two gamestate objects as input and output a tuple
                        containing the reward for the player and opponent
-        - statedump_prefix: every reset, save the past history as JSON
+        - dump_states (bool): If True, every reset, save the past history as JSON
           array of dict {'state': state, agent_name: agent_action ... }
-          to the file {statedump_prefix}_{n}.txt where n starts at 1 and
-          increments every reset.
+          to the file {statedump_dir}/{statedump_prefix}_{n}.txt where n starts at 1 and
+          increments every reset. Only dump if self.dump_states is True
+        - statedump_dir (path): Directory to store states, if dump_states is set
+        - statedump_prefiex (str): File prefix for statedumps
         - kill_reward: (int) Reward an agents gets (loses) for each kill (death) in default reward function
         - aggro_coeff: (float): Relative weight of damage given to damage taken in potential function. >1 encourages more aggressive agents
         - gamma (float): Discount factor
@@ -92,13 +109,51 @@ class SSBMEnv(MultiAgentEnv):
         - dolphin_timeout (int): Number of seconds after which we consider a dolphin startup failed
     """
     def __init__(self, dolphin_exe_path, ssbm_iso_path, char1=melee.Character.FOX, char2=melee.Character.FALCO,
-                stage=melee.Stage.FINAL_DESTINATION, symmetric=False, cpu_level=1, log=False, reward_func=None, kill_reward=200, aggro_coeff=1, gamma=0.99, shaping_coeff=1, off_stage_weight=10, num_dolphin_retries=3, dolphin_timeout=20, statedump_prefix=None, **kwargs):
+                stage=melee.Stage.FINAL_DESTINATION, cpu=False, cpu_level=1, log=False, reward_func=None, kill_reward=200, aggro_coeff=1, gamma=0.99, shaping_coeff=1, off_stage_weight=10, num_dolphin_retries=3, dolphin_timeout=20, dump_states=False, statedump_dir=os.path.abspath('.'), statedump_prefix="ssbm_out", **kwargs):
+        ### Args checking ###
+
+        # Paths
+        if not os.path.exists(dolphin_exe_path) or not os.path.isdir(dolphin_exe_path):
+            raise ValueError("dolphin exe path {} is not a valid path to the executable directory!".format(dolphin_exe_path))
+        if not os.path.exists(ssbm_iso_path) or not os.path.isfile(ssbm_iso_path):
+            raise ValueError("ssbm_iso_path {} is not a valid path to an ISO file!".format(ssbm_iso_path))
+        # constants 
+        if dolphin_timeout < 0 or dolphin_timeout > 100:
+            raise ValueError("Dolphin_timeout must be an in [0, 100]")
+        if not type(num_dolphin_retries) == int or num_dolphin_retries < 0 or num_dolphin_retries > 5:
+            raise ValueError("num_dolphin_retries must be an int in [0, 5]")
+        if not type(cpu_level) == int or cpu_level < 1 or cpu_level > 9:
+            raise ValueError("cpu_level must be an int in [1, 9]")
+        # Enums
+        try:
+            is_valid = char1 in melee.Character
+        except:
+            raise ValueError("{} is not a valid character!".format(char1))
+        else:
+            if not is_valid:
+                raise ValueError("{} is not a valid character!".format(char1))
+        try:
+            is_valid = char2 in melee.Character
+        except:
+            raise ValueError("{} is not a valid character!".format(char2))
+        else:
+            if not is_valid:
+                raise ValueError("{} is not a valid character!".format(char2))
+        try:
+            is_valid = stage in melee.Stage
+        except:
+            raise ValueError("{} is not a valid character!".format(stage))
+        else:
+            if not is_valid:
+                raise ValueError("{} is not a valid character!".format(stage))
+        
+        # Assign instance variables
         self.dolphin_exe_path = dolphin_exe_path
         self.ssbm_iso_path = ssbm_iso_path
         self.char1 = char1
         self.char2 = char2
         self.stage = stage
-        self.symmetric = symmetric
+        self.cpu = cpu
         self.cpu_level = cpu_level
         self.reward_func = reward_func
         self.logger = melee.Logger()
@@ -107,18 +162,21 @@ class SSBMEnv(MultiAgentEnv):
         self.gamma = gamma
         self.kill_reward = kill_reward
         self.aggro_coeff = aggro_coeff
-        self.shaping_coeff = 1
-        self.off_stage_weight = 10
+        self.shaping_coeff = shaping_coeff
+        self.off_stage_weight = off_stage_weight
         self.num_dolphin_retries = num_dolphin_retries
         self.dolphin_timeout = dolphin_timeout
         self._is_dolphin_running = False
+        self.dump_states = dump_states
+        self.statedump_dir = statedump_dir
         self.statedump_prefix = statedump_prefix
         self.statedump_n = 0
+        self.state_data = []
 
+        # Space creation
         self.get_reward = self._default_get_reward if not self.reward_func else self.reward_func
-        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(69,), dtype=np.float32)
-        self.num_actions = (len(buttons) + len(intervals))*2 # num actions *2 for press/release and both joysticks
-        self.action_space = spaces.Discrete(self.num_actions+1) # plus one for nop
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(self.OBSERVATION_DIM,), dtype=np.float32)
+        self.action_space = spaces.Discrete(self.NUM_ACTIONS+1) # plus one for nop
 
     def _default_get_reward(self, prev_gamestate, gamestate): # define reward function
         sparse_reward = self._get_sparse_reward(prev_gamestate, gamestate)
@@ -191,50 +249,40 @@ class SSBMEnv(MultiAgentEnv):
         # I make the assumption that p1 is *always* a non-cpu and p2 is the cpu, if present
         p1 = self.gamestate.player[self.ctrlr_port]
         p2 = self.gamestate.player[self.ctrlr_op_port]
-        p1_state = np.array([p1.character.value, p1.x, p1.y, p1.percent, p1.shield_strength, p1.facing, p1.action.value, p1.action_frame,
-                             float(p1.invulnerable), p1.invulnerability_left, float(p1.hitlag), p1.hitstun_frames_left, p1.jumps_left,
-                             float(p1.on_ground), p1.speed_air_x_self, p1.speed_y_self, p1.speed_x_attack, p1.speed_y_attack, p1.speed_ground_x_self,
-                             float(p1.controller_state.button[enums.Button.BUTTON_A]), float(p1.controller_state.button[enums.Button.BUTTON_B]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_X]), float(p1.controller_state.button[enums.Button.BUTTON_Y]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_Z]), float(p1.controller_state.button[enums.Button.BUTTON_L]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_R]), float(p1.controller_state.button[enums.Button.BUTTON_D_UP]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_D_DOWN]), float(p1.controller_state.button[enums.Button.BUTTON_D_LEFT]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_D_RIGHT]), p1.controller_state.main_stick[0], p1.controller_state.main_stick[1],
-                             p1.controller_state.c_stick[0], p1.controller_state.c_stick[1],
-                             self.gamestate.distance, p2.character.value, p2.x, p2.y, p2.percent, p2.shield_strength, p2.facing, p2.action.value, p2.action_frame,
-                             float(p2.invulnerable), p2.invulnerability_left, float(p2.hitlag), p2.hitstun_frames_left, p2.jumps_left,
-                             float(p2.on_ground), p2.speed_air_x_self, p2.speed_y_self, p2.speed_x_attack, p2.speed_y_attack, p2.speed_ground_x_self,
-                             float(p2.controller_state.button[enums.Button.BUTTON_A]), float(p2.controller_state.button[enums.Button.BUTTON_B]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_X]), float(p2.controller_state.button[enums.Button.BUTTON_Y]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_Z]), float(p2.controller_state.button[enums.Button.BUTTON_L]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_R]), float(p2.controller_state.button[enums.Button.BUTTON_D_UP]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_D_DOWN]), float(p2.controller_state.button[enums.Button.BUTTON_D_LEFT]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_D_RIGHT]), p2.controller_state.main_stick[0], p2.controller_state.main_stick[1],
-                             p2.controller_state.c_stick[0], p2.controller_state.c_stick[1]])
-        p1, p2 = p2, p1
 
-        p2_state = np.array([p1.character.value, p1.x, p1.y, p1.percent, p1.shield_strength, p1.facing, p1.action.value, p1.action_frame,
-                             float(p1.invulnerable), p1.invulnerability_left, float(p1.hitlag), p1.hitstun_frames_left, p1.jumps_left,
-                             float(p1.on_ground), p1.speed_air_x_self, p1.speed_y_self, p1.speed_x_attack, p1.speed_y_attack, p1.speed_ground_x_self,
-                             float(p1.controller_state.button[enums.Button.BUTTON_A]), float(p1.controller_state.button[enums.Button.BUTTON_B]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_X]), float(p1.controller_state.button[enums.Button.BUTTON_Y]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_Z]), float(p1.controller_state.button[enums.Button.BUTTON_L]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_R]), float(p1.controller_state.button[enums.Button.BUTTON_D_UP]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_D_DOWN]), float(p1.controller_state.button[enums.Button.BUTTON_D_LEFT]),
-                             float(p1.controller_state.button[enums.Button.BUTTON_D_RIGHT]), p1.controller_state.main_stick[0], p1.controller_state.main_stick[1],
-                             p1.controller_state.c_stick[0], p1.controller_state.c_stick[1],
-                             self.gamestate.distance, p2.character.value, p2.x, p2.y, p2.percent, p2.shield_strength, p2.facing, p2.action.value, p2.action_frame,
-                             float(p2.invulnerable), p2.invulnerability_left, float(p2.hitlag), p2.hitstun_frames_left, p2.jumps_left,
-                             float(p2.on_ground), p2.speed_air_x_self, p2.speed_y_self, p2.speed_x_attack, p2.speed_y_attack, p2.speed_ground_x_self,
-                             float(p2.controller_state.button[enums.Button.BUTTON_A]), float(p2.controller_state.button[enums.Button.BUTTON_B]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_X]), float(p2.controller_state.button[enums.Button.BUTTON_Y]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_Z]), float(p2.controller_state.button[enums.Button.BUTTON_L]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_R]), float(p2.controller_state.button[enums.Button.BUTTON_D_UP]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_D_DOWN]), float(p2.controller_state.button[enums.Button.BUTTON_D_LEFT]),
-                             float(p2.controller_state.button[enums.Button.BUTTON_D_RIGHT]), p2.controller_state.main_stick[0], p2.controller_state.main_stick[1],
-                             p2.controller_state.c_stick[0], p2.controller_state.c_stick[1]])
+        # What buttons are pressed (or not)
+        p1_button_state = [float(p1.controller_state.button[btn]) for btn in buttons]
+        p2_button_state = [float(p2.controller_state.button[btn]) for btn in buttons]
 
-        observations = [p1_state, p2_state]
+        # Position of joysticks
+        p1_stick_state = [p1.controller_state.main_stick[0], p1.controller_state.main_stick[1], 
+                          p1.controller_state.c_stick[0], p1.controller_state.c_stick[1]]
+        p2_stick_state = [p2.controller_state.main_stick[0], p2.controller_state.main_stick[1], 
+                          p2.controller_state.c_stick[0], p2.controller_state.c_stick[1]]
+
+        # All controller info
+        p1_controller_state = [*p1_button_state, *p1_stick_state]
+        p2_controller_state = [*p2_button_state, *p2_stick_state]
+
+        # All character-centric info
+        p1_character_state = [p1.character.value, p1.x, p1.y, p1.percent, p1.shield_strength, p1.facing, p1.action.value, p1.action_frame,
+                              float(p1.invulnerable), p1.invulnerability_left, float(p1.hitlag), p1.hitstun_frames_left, p1.jumps_left,
+                              float(p1.on_ground), p1.speed_air_x_self, p1.speed_y_self, p1.speed_x_attack, p1.speed_y_attack, p1.speed_ground_x_self,
+                              float(p1.off_stage), p1.moonwalkwarning, *p1.ecb_right, *p1.ecb_left, *p1.ecb_top, *p1.ecb_bottom]
+        p2_character_state = [p2.character.value, p2.x, p2.y, p2.percent, p2.shield_strength, p2.facing, p2.action.value, p2.action_frame,
+                              float(p2.invulnerable), p2.invulnerability_left, float(p2.hitlag), p2.hitstun_frames_left, p2.jumps_left,
+                              float(p2.on_ground), p2.speed_air_x_self, p2.speed_y_self, p2.speed_x_attack, p2.speed_y_attack, p2.speed_ground_x_self,
+                              float(p2.off_stage), p2.moonwalkwarning, *p2.ecb_right, *p2.ecb_left, *p2.ecb_top, *p2.ecb_bottom]
+
+        # All agent-centric info
+        p1_state = [*p1_controller_state, *p1_character_state]
+        p2_state = [*p2_controller_state, *p2_character_state]
+
+        # Final observations (note they're symmetrically encoded so that 'my' state always comes first)
+        p1_obs = np.array([*p1_state, self.gamestate.distance, *p2_state])
+        p2_obs = np.array([*p2_state, self.gamestate.distance, *p1_state])
+
+        observations = [p1_obs, p2_obs]
         obs_dict = { agent_name : observations[i] for i, agent_name in enumerate(self.agents) }
 
         return obs_dict
@@ -275,7 +323,6 @@ class SSBMEnv(MultiAgentEnv):
                                     blocking_input=False,
                                     polling_mode=False,
                                     logger=self.logger)
-        self.symmetric = self.symmetric
         self.ctrlr = melee.Controller(console=self.console,
                                     port=PLAYER_PORT,
                                     type=melee.ControllerType.STANDARD)
@@ -310,7 +357,7 @@ class SSBMEnv(MultiAgentEnv):
                                         connect_code=CONNECT_CODE,
                                         autostart=True,
                                         swag=False,
-                                        make_cpu=not self.symmetric,
+                                        make_cpu=self.cpu,
                                         level=self.cpu_level)
 
         while self.gamestate.menu_state not in [melee.Menu.IN_GAME, melee.Menu.SUDDEN_DEATH]:
@@ -359,22 +406,34 @@ class SSBMEnv(MultiAgentEnv):
             raise RuntimeError("Controller port inconsistency!")
 
         prev_gamestate = self.gamestate
-        self.state_data.append({'state': self._get_state()})
+
         # perform actions
         for agent_idx, agent in enumerate(self.agents):
             action = joint_action[agent]
-            self.state_data[-1][agent] = action
-            self._perform_action(agent_idx, action)
+            self._perform_action(agent_idx, action)      
 
         # step env
         self.gamestate = self.console.step()
-        # collect reward
+        
+        # Collect all transition data
         reward = self.get_reward(prev_gamestate, self.gamestate)
         state = self._get_state()
-        self.state_data[-1]['next_state'] = state
-        # determine if game is over and write extra info
         done = self._get_done()
         info = self._get_info()
+
+        all_done = done['__all__']
+
+        # Log (s_t, a_t, s'_t) data if necessary
+        if self.dump_states:
+            # Log a_t
+            for agent in self.agents:
+                self.state_data[-1][agent] = joint_action[agent]
+            # Log s'_t
+            self.state_data[-1]['next_state'] = state
+            # Begin next (s, a, s') tuple if not done
+            if not all_done:
+                # Log s_{t+1}
+                self.state_data.append({ "state" : state })
 
         if self.gamestate.menu_state != melee.enums.Menu.IN_GAME:
             for key, _  in done.items():
@@ -383,9 +442,9 @@ class SSBMEnv(MultiAgentEnv):
             for key, _ in done.items():
                 done[key] = False
 
-        if done['__all__']:
+        if all_done:
             self._stop_dolphin()
-        print(state)
+        
         return state, reward, done, info
     
     def state_np_to_list(self, dictionary):
@@ -396,27 +455,20 @@ class SSBMEnv(MultiAgentEnv):
                 self.state_np_to_list(dictionary[entry])
     
     def dump_state(self):
-        if self.statedump_prefix is not None:
-            if self.statedump_n > 0:
-                with open(f"./{self.statedump_prefix}_{self.statedump_n}.txt", "w") as f:
-                    for entry in self.state_data:
-                        self.state_np_to_list(entry)
-                    f.write(json.dumps(self.state_data))
+        if self.dump_states and self.state_data:
+            with open(os.path.join(self.statedump_dir, f"{self.statedump_prefix}_{self.statedump_n}.txt"), "w") as f:
+                for entry in self.state_data:
+                    self.state_np_to_list(entry)
+                f.write(json.dumps(self.state_data))
             self.statedump_n += 1
         self.state_data = []
-
-    def reset(self):    # TODO: should reset state to initial state, how to do this?
-        self.dump_state()
-        
-        if self._is_dolphin_running:
-            self._stop_dolphin()
 
     def reset(self):    # TODO: should reset state to initial state, how to do this?
         self.dump_state()
         # hashtag JustDolphinThings
         self.start_game()
 
-        if self.symmetric:
+        if not self.cpu:
             self.agents = ['ai_1', 'ai_2']
         else:
             self.agents = ['ai_1']
@@ -429,32 +481,46 @@ class SSBMEnv(MultiAgentEnv):
 
         # Return initial observation
         joint_obs = self._get_state()
+
+        if self.dump_states:
+            self.state_data.append({ "state" : joint_obs })
         return joint_obs
 
     
     def render(self, mode='human', close=False):    # FIXME: changing this parameter does nothing rn??
         self.console.render = True
     
-actions_list = ["ZERO", "BUTTON_A","BUTTON_B","BUTTON_X","BUTTON_Y","BUTTON_Z","BUTTON_L","BUTTON_R","BUTTON_D_UP","BUTTON_D_DOWN","BUTTON_D_LEFT","BUTTON_D_RIGHT","BUTTON_A_R","BUTTON_B_R","BUTTON_X_R","BUTTON_Y_R","BUTTON_Z_R","BUTTON_L_R","BUTTON_R_R","BUTTON_D_UP_R","BUTTON_D_DOWN_R","BUTTON_D_LEFT_R","BUTTON_D_RIGHT_R","BUTTON_MAIN00", "BUTTON_MAIN50", "BUTTON_MAIN05", "BUTTON_MAIN10", "BUTTON_MAIN55", "BUTTON_MAIN01", "BUTTON_MAIN15", "BUTTON_MAIN51", "BUTTON_MAIN11", "BUTTON_C00", "BUTTON_C50", "BUTTON_C05", "BUTTON_C10", "BUTTON_C55", "BUTTON_C01", "BUTTON_C15", "BUTTON_C51", "BUTTON_C11"]
+actions_list = [
+    "ZERO", "BUTTON_A", "BUTTON_B", "BUTTON_X", "BUTTON_Z", "BUTTON_L",
+    "BUTTON_R", "BUTTON_D_UP", "BUTTON_D_DOWN", "BUTTON_D_LEFT",
+    "BUTTON_D_RIGHT", "BUTTON_A_R", "BUTTON_B_R", "BUTTON_X_R",
+    "BUTTON_Z_R", "BUTTON_L_R", "BUTTON_R_R", "BUTTON_D_UP_R",
+    "BUTTON_D_DOWN_R", "BUTTON_D_LEFT_R", "BUTTON_D_RIGHT_R",
+    *[f"BUTTON_MAIN{interval}" for interval in intervals],
+    *[f"BUTTON_C{interval}" for interval in intervals]
+]
 
 def get_action(name):
     return actions_list.index(name)
 
 keymap = {
-    'w': "BUTTON_MAIN51", # up
-    'a': "BUTTON_MAIN05", # left
-    's': "BUTTON_MAIN50", # down
-    'd': "BUTTON_MAIN15", # right
-    'j': "BUTTON_A",      # attack
-    'k': "BUTTON_B",      # special
-    'l': "BUTTON_L",      # shield
-    'i': "BUTTON_X",      # jump
-    ';': "BUTTON_Z",      # grab
-    ',': "BUTTON_D_UP",   # taunt
-    'r': "BUTTON_C51",    # up smash
-    'f': "BUTTON_C05",    # left smash
-    'g': "BUTTON_C50",    # down smash
-    'h': "BUTTON_C15",    # right smash
+    'w': "BUTTON_MAIN(0.5, 1.0)", # up
+    'a': "BUTTON_MAIN(0.0, 0.5)", # left
+    's': "BUTTON_MAIN(0.5, 0.0)", # down
+    'd': "BUTTON_MAIN(1.0, 0.5)", # right
+    'j': "BUTTON_A",              # attack
+    'k': "BUTTON_B",              # special
+    'l': "BUTTON_L",              # shield
+    'i': "BUTTON_X",              # jump
+    ';': "BUTTON_Z",              # grab
+    '1': "BUTTON_D_LEFT",         # taunt
+    '2': "BUTTON_D_DOWN",         # taunt
+    '3': "BUTTON_D_UP",           # taunt
+    '4': "BUTTON_D_RIGHT",        # taunt
+    't': "BUTTON_C(0.5, 1.0)",    # up smash
+    'f': "BUTTON_C(0.0, 0.5)",    # left smash
+    'g': "BUTTON_C(0.5, 0.0)",    # down smash
+    'h': "BUTTON_C(1.0, 0.5)",    # right smash
 }
 
 def action_from_keys(keys):
@@ -501,9 +567,9 @@ def process_released():
 
 def complement(action):
     if "MAIN" in actions_list[action]:
-        return get_action("BUTTON_MAIN55") # idk
+        return get_action("BUTTON_MAIN(0.5, 0.5)")
     elif "BUTTON_C" in actions_list[action]:
-        return get_action("BUTTON_C55") # idk
+        return get_action("BUTTON_C(0.5, 0.5)")
     elif actions_list[action] == "ZERO":
         return get_action("ZERO")
     else:
@@ -513,51 +579,62 @@ if __name__ == "__main__":
     import time
     import argparse
     parser = argparse.ArgumentParser(description='Example of Gym Wrapper in action')
-    parser.add_argument('--dolphin_executable_path', '-e', default=None,
+    parser.add_argument('--dolphin_exe_path', '-e', default=None,
                         help='The directory where dolphin is')
-    parser.add_argument('--iso_path', '-i', default="~/SSMB.iso",
+    parser.add_argument('--ssbm_iso_path', '-i', default="~/SSMB.iso",
                         help='Full path to Melee ISO file')
     parser.add_argument('--cpu', '-c', action='store_true',
                         help='Whether to set oponent as CPU')
     parser.add_argument('--cpu_level', '-l', type=int, default=3,
                         help='Level of CPU. Only valid if cpu is true')
     parser.add_argument('--human', '-m', action='store_true', help='P1 Human')
-    parser.add_argument('--statedump', '-s', help='where to dump states to')
-
+    parser.add_argument('--dump_states', '-s', action='store_true', help='Should we log state-action pairs?')
+    parser.add_argument('--statedump_dir', '-sd', type=str, default=os.path.abspath('.'), help='where to dump states to')
+    parser.add_argument('--statedump_prefix', '-sp', type=str, default='out', help='file prefix for state dumps')
+    
     args = parser.parse_args()
     
     pynput.keyboard.Listener(on_press=on_press, on_release=on_release).start()
 
-    ssbm_env = SSBMEnv(args.dolphin_executable_path, args.iso_path, symmetric=not args.cpu, cpu_level=args.cpu_level, statedump_prefix=args.statedump, log=True)
+    ssbm_env = SSBMEnv(**vars(args))
     obs = ssbm_env.reset()
 
     done = False
-    
-    while not done:
-        # Perform first part of upsmash
-        joint_action = {}
-        if args.human:
-                if keys_released:
-                    action = process_released()
-                elif keys_pressed:
-                    action = process_pressed()
-                else:
-                    action = 0
-                joint_action['ai_1'] = action
-        else:
-            joint_action['ai_1'] = 68
-        if not args.cpu:
-            joint_action['ai_2'] = 0
-        obs, reward, done, info = ssbm_env.step(joint_action)
-        done = done['__all__']
+    try:
+        while not done:
+            # Perform first part of upsmash
+            joint_action = {}
+            if args.human:
+                    if keys_released:
+                        action = process_released()
+                    elif keys_pressed:
+                        action = process_pressed()
+                    else:
+                        action = 0
+                    joint_action['ai_1'] = action
+            else:
+                joint_action['ai_1'] = 68
+            if not args.cpu:
+                joint_action['ai_2'] = 0
+            obs, reward, done, info = ssbm_env.step(joint_action)
+            done = done['__all__']
 
-        if not args.human:
-            # Perform second part of upsmash
-            joint_action = {'ai_1': 65}
-            if not done:
-                if not args.cpu:
-                    joint_action['ai_2'] = 0
-                obs, reward, done, info = ssbm_env.step(joint_action)
-                done = done['__all__']
-        
-    ssbm_env.dump_state() # dump the log. normally done w/env.reset()
+            if not args.human:
+                # Perform second part of upsmash
+                joint_action = {'ai_1': 65}
+                if not done:
+                    if not args.cpu:
+                        joint_action['ai_2'] = 0
+                    obs, reward, done, info = ssbm_env.step(joint_action)
+                    done = done['__all__']
+    except KeyboardInterrupt as e:
+        if args.dump_states:
+            print("Got Ctrl-C, dumping state...")
+            ssbm_env.dump_state()
+            print("State dumped, re-raising exception.")
+            raise(e)
+        else:
+            raise(e)
+    if args.dump_states:
+        print("Exited normally, dumping state...")
+        ssbm_env.dump_state()
