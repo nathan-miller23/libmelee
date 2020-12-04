@@ -6,7 +6,7 @@ import numpy as np
 from melee import enums
 import pynput
 import json
-from melee.utils import Timeout
+from melee.utils import TimeoutException
 from itertools import product
 
 from collections import deque
@@ -364,6 +364,9 @@ class SSBMEnv(MultiAgentEnv):
 
     def _step_through_menu(self):
         # Step through main menu, player select, stage select scenes # TODO: include frame processing warning stuff
+        if time.time() - self._start_game_time > self.dolphin_timeout:
+            raise TimeoutException()
+
         self.gamestate = self.console.step()
         menu_helper = melee.MenuHelper(controller_1=self.ctrlr,
                                         controller_2=self.ctrlr_op,
@@ -375,8 +378,9 @@ class SSBMEnv(MultiAgentEnv):
                                         swag=False,
                                         make_cpu=self.cpu,
                                         level=self.cpu_level)
-
         while self.gamestate.menu_state not in [melee.Menu.IN_GAME, melee.Menu.SUDDEN_DEATH]:
+            if time.time() - self._start_game_time > self.dolphin_timeout:
+                raise TimeoutException()
             self.gamestate = self.console.step()
             menu_helper.step(self.gamestate)
             if self.log:
@@ -384,18 +388,22 @@ class SSBMEnv(MultiAgentEnv):
                 self.logger.writeframe()
 
     def _start_game(self):
+        self._start_game_time = time.time()
         self._start_dolphin()
         self._step_through_menu()
 
     def start_game(self):
         if self._is_dolphin_running:
             self._stop_dolphin()
-        
-        start_game_timeout = Timeout(self._start_game, self.dolphin_timeout)
 
         for _ in range(self.num_dolphin_retries):
-            success = start_game_timeout()
-            if success:
+            try:
+                self._start_game()
+            except TimeoutException:
+                print("Starting game timed out!")
+            except Exception as e:
+                print("Starting game failed with error", e)
+            else:
                 return True
             print("Failed to start dolphin. Retrying...")
             self._stop_dolphin()
