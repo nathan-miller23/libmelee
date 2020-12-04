@@ -229,8 +229,10 @@ class SSBMEnv(MultiAgentEnv):
     def _potential(self, gamestate):
         p1_off_stage = -1 * int(gamestate.player[self.ctrlr_port].off_stage) * self.off_stage_weight
         p2_off_stage = -1 * int(gamestate.player[self.ctrlr_op_port].off_stage) * self.off_stage_weight
+        p1_x = abs(gamestate.player[self.ctrlr_port].x)
+        p2_x = abs(gamestate.player[self.ctrlr_op_port].x)
 
-        potentials = [p1_off_stage, p2_off_stage]
+        potentials = [p1_off_stage - p1_x, p2_off_stage - p2_x]
 
         joint_potential = {}
         for i, agent in enumerate(self.agents):
