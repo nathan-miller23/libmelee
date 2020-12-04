@@ -419,6 +419,8 @@ class SSBMEnv(MultiAgentEnv):
         prev_frame = self.gamestate.frame
         while self.gamestate.frame < prev_frame + self.skip_frames:
             self.gamestate = self.console.step()
+            if self._get_done():
+                break
         
         # Collect all transition data
         reward = self.get_reward(prev_gamestate, self.gamestate)
