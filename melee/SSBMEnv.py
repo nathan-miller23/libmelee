@@ -109,7 +109,7 @@ class SSBMEnv(MultiAgentEnv):
         - dolphin_timeout (int): Number of seconds after which we consider a dolphin startup failed
     """
     def __init__(self, dolphin_exe_path, ssbm_iso_path, char1=melee.Character.FOX, char2=melee.Character.FALCO,
-                stage=melee.Stage.FINAL_DESTINATION, cpu=False, cpu_level=1, log=False, reward_func=None, kill_reward=200, aggro_coeff=1, gamma=0.99, shaping_coeff=1, off_stage_weight=10, num_dolphin_retries=3, dolphin_timeout=20, dump_states=False, statedump_dir=os.path.abspath('.'), statedump_prefix="ssbm_out", **kwargs):
+                stage=melee.Stage.FINAL_DESTINATION, cpu=False, cpu_level=1, log=False, reward_func=None, kill_reward=200, aggro_coeff=1, gamma=0.99, shaping_coeff=1, off_stage_weight=10, num_dolphin_retries=3, dolphin_timeout=20, dump_states=False, statedump_dir=os.path.abspath('.'), statedump_prefix="ssbm_out", skip_frames=3, **kwargs):
         ### Args checking ###
 
         # Paths
@@ -172,6 +172,7 @@ class SSBMEnv(MultiAgentEnv):
         self.statedump_prefix = statedump_prefix
         self.statedump_n = 0
         self.state_data = []
+        self.skip_frames = skip_frames
 
         # Space creation
         self.get_reward = self._default_get_reward if not self.reward_func else self.reward_func
@@ -398,6 +399,8 @@ class SSBMEnv(MultiAgentEnv):
         if set(joint_action.keys()).intersection(self.agents) != set(joint_action.keys()).union(self.agents):
             raise ValueError("Invalid agent in action dictionary!")
 
+       # print("[INFO]: " + str(self.console.processingtime*1000) + " ms to process frame.")
+
         # why do we need to do this?
         self.ctrlr_port = melee.gamestate.port_detector(self.gamestate, self.char1)
         self.ctrlr_op_port = melee.gamestate.port_detector(self.gamestate, self.char2)
@@ -406,14 +409,16 @@ class SSBMEnv(MultiAgentEnv):
             raise RuntimeError("Controller port inconsistency!")
 
         prev_gamestate = self.gamestate
-
+    
         # perform actions
         for agent_idx, agent in enumerate(self.agents):
             action = joint_action[agent]
             self._perform_action(agent_idx, action)      
 
         # step env
-        self.gamestate = self.console.step()
+        prev_frame = self.gamestate.frame
+        while self.gamestate.frame < prev_frame + self.skip_frames:
+            self.gamestate = self.console.step()
         
         # Collect all transition data
         reward = self.get_reward(prev_gamestate, self.gamestate)
