@@ -9,6 +9,8 @@ import json
 from melee.utils import Timeout
 from itertools import product
 
+from collections import deque
+
 """
 Gym compatible env for libmelee (an RL framework for SSBM)
 
@@ -109,7 +111,7 @@ class SSBMEnv(MultiAgentEnv):
         - dolphin_timeout (int): Number of seconds after which we consider a dolphin startup failed
     """
     def __init__(self, dolphin_exe_path, ssbm_iso_path, char1=melee.Character.FOX, char2=melee.Character.FALCO,
-                stage=melee.Stage.FINAL_DESTINATION, cpu=False, cpu_level=1, log=False, reward_func=None, kill_reward=200, aggro_coeff=1, gamma=0.99, shaping_coeff=1, off_stage_weight=10, num_dolphin_retries=3, dolphin_timeout=20, dump_states=False, statedump_dir=os.path.abspath('.'), statedump_prefix="ssbm_out", skip_frames=3, **kwargs):
+                stage=melee.Stage.FINAL_DESTINATION, cpu=False, cpu_level=1, log=False, reward_func=None, kill_reward=200, aggro_coeff=1, gamma=0.99, shaping_coeff=1, off_stage_weight=10, num_dolphin_retries=3, dolphin_timeout=20, dump_states=False, statedump_dir=os.path.abspath('.'), statedump_prefix="ssbm_out", every_nth=4, buffer_size=4, **kwargs):
         ### Args checking ###
 
         # Paths
@@ -172,12 +174,19 @@ class SSBMEnv(MultiAgentEnv):
         self.statedump_prefix = statedump_prefix
         self.statedump_n = 0
         self.state_data = []
-        self.skip_frames = skip_frames
+        self.every_nth = every_nth
+        self.buffer_size = buffer_size
 
         # Space creation
         self.get_reward = self._default_get_reward if not self.reward_func else self.reward_func
-        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(self.OBSERVATION_DIM,), dtype=np.float32)
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(self.OBSERVATION_DIM, self.buffer_size), dtype=np.float32)
         self.action_space = spaces.Discrete(self.NUM_ACTIONS+1) # plus one for nop
+        
+        self.p1_buffer = deque([np.zeros(self.OBSERVATION_DIM)]*self.buffer_size)
+        self.buffers = [self.p1_buffer]
+        if not self.cpu:
+            self.p2_buffer = deque([np.zeros(self.OBSERVATION_DIM)]*self.buffer_size)
+            self.buffers.append(self.p2_buffer)
 
     def _default_get_reward(self, prev_gamestate, gamestate): # define reward function
         sparse_reward = self._get_sparse_reward(prev_gamestate, gamestate)
@@ -284,7 +293,11 @@ class SSBMEnv(MultiAgentEnv):
         p2_obs = np.array([*p2_state, self.gamestate.distance, *p1_state])
 
         observations = [p1_obs, p2_obs]
-        obs_dict = { agent_name : observations[i] for i, agent_name in enumerate(self.agents) }
+        for i, buff in enumerate(self.buffers):
+            buff.pop()
+            buff.appendleft(observations[i])
+
+        obs_dict = { agent_name : np.reshape(np.array(list(self.buffers[i]), (self.OBSERVATION_DIM, self.buffer_size))) for i, agent_name in enumerate(self.agents) }
 
         return obs_dict
 
@@ -417,9 +430,9 @@ class SSBMEnv(MultiAgentEnv):
 
         # step env
         prev_frame = self.gamestate.frame
-        while self.gamestate.frame < prev_frame + self.skip_frames:
+        while self.gamestate.frame < prev_frame + self.every_nth:
             self.gamestate = self.console.step()
-            if self._get_done():
+            if self._get_done()['_all_'] :
                 break
         
         # Collect all transition data
