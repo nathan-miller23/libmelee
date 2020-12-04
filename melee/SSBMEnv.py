@@ -192,6 +192,7 @@ class SSBMEnv(MultiAgentEnv):
         sparse_reward = self._get_sparse_reward(prev_gamestate, gamestate)
         potential_reward = self._get_potential_reward(prev_gamestate, gamestate)
 
+
         joint_shaped_reward = {}
         for i, agent in enumerate(self.agents):
             joint_shaped_reward[agent] = sparse_reward[agent] + self.shaping_coeff * potential_reward[agent]
@@ -200,18 +201,15 @@ class SSBMEnv(MultiAgentEnv):
 
     def _get_sparse_reward(self, prev_gamestate, gamestate):
         # TODO: make sure that the correct damage goes to the correct player
-        p1DamageDealt = max(gamestate.player[self.ctrlr_op_port].percent - prev_gamestate.player[self.ctrlr_op_port].percent, 0)
-        p1DamageTaken = max(gamestate.player[self.ctrlr_port].percent - prev_gamestate.player[self.ctrlr_port].percent, 0)
+        p1DamageDealt = max(int(gamestate.player[self.ctrlr_op_port].percent) - int(prev_gamestate.player[self.ctrlr_op_port].percent), 0)
+        p1DamageTaken = max(int(gamestate.player[self.ctrlr_port].percent) - int(prev_gamestate.player[self.ctrlr_port].percent), 0)
 
-        isp1Dead = gamestate.player[self.ctrlr_port].action.value <= 0xa
-        isp2Dead = gamestate.player[self.ctrlr_op_port].action.value <= 0xa
-
-        wasp1Dead = prev_gamestate.player[self.ctrlr_port].action.value <= 0xa
-        wasp2Dead = prev_gamestate.player[self.ctrlr_op_port].action.value <= 0xa
+        p1DeltaStock = int(gamestate.player[self.ctrlr_port].stock) - int(prev_gamestate.player[self.ctrlr_port].stock)
+        p2DeltaStock = int(gamestate.player[self.ctrlr_op_port].stock) - int(prev_gamestate.player[self.ctrlr_op_port].stock)
 
 
-        p1rkill = isp2Dead and not wasp2Dead 
-        p1rdeath = isp1Dead and not wasp1Dead
+        p1rkill = int(p2DeltaStock < 0)
+        p1rdeath = int(p1DeltaStock < 0)
 
         p1_reward = self.aggro_coeff * p1DamageDealt - p1DamageTaken + p1rkill * self.kill_reward - p1rdeath * self.kill_reward
         p2_reward = self.aggro_coeff * p1DamageTaken - p1DamageDealt + p1rdeath * self.kill_reward - p1rkill * self.kill_reward
@@ -247,7 +245,8 @@ class SSBMEnv(MultiAgentEnv):
         joint_potential_reward = {}
 
         for i, agent in enumerate(self.agents):
-            joint_potential_reward[agent] = self.gamma * phi_s_prime[agent] - phi_s[agent]
+            potential_i = self.gamma * phi_s_prime[agent] - phi_s[agent]
+            joint_potential_reward[agent] = potential_i if potential_i < 50 else 0
 
         return joint_potential_reward
 
