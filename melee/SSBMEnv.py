@@ -297,12 +297,12 @@ class SSBMEnv(MultiAgentEnv):
             buff.pop()
             buff.appendleft(observations[i])
 
-        obs_dict = { agent_name : np.reshape(np.array(list(self.buffers[i]), (self.OBSERVATION_DIM, self.buffer_size))) for i, agent_name in enumerate(self.agents) }
+        obs_dict = { agent_name : np.array(list(self.buffers[i])).transpose(1, 0) for i, agent_name in enumerate(self.agents) }
 
         return obs_dict
 
     def _get_done(self):
-        done =  self.gamestate.player[self.ctrlr_port].action.value <= 0xa or self.gamestate.player[self.ctrlr_op_port].action.value <= 0xa
+        done =  self.gamestate.player[self.ctrlr_port].stock <= 0x0 or self.gamestate.player[self.ctrlr_op_port].stock <= 0x0
         return {'__all__' : done }
 
     def _get_info(self):
@@ -432,7 +432,7 @@ class SSBMEnv(MultiAgentEnv):
         prev_frame = self.gamestate.frame
         while self.gamestate.frame < prev_frame + self.every_nth:
             self.gamestate = self.console.step()
-            if self._get_done()['_all_'] :
+            if self._get_done()['__all__'] :
                 break
         
         # Collect all transition data
@@ -454,13 +454,6 @@ class SSBMEnv(MultiAgentEnv):
             if not all_done:
                 # Log s_{t+1}
                 self.state_data.append({ "state" : state })
-
-        if self.gamestate.menu_state != melee.enums.Menu.IN_GAME:
-            for key, _  in done.items():
-                done[key] = True
-        else:
-            for key, _ in done.items():
-                done[key] = False
 
         all_done = done['__all__']
 
@@ -615,10 +608,14 @@ if __name__ == "__main__":
     parser.add_argument('--statedump_prefix', '-sp', type=str, default='out', help='file prefix for state dumps')
     
     args = parser.parse_args()
+    args_dict = vars(args)
+    args_dict['buffer_size'] = 4
+    args_dict['every_nth'] = 4
     
-    pynput.keyboard.Listener(on_press=on_press, on_release=on_release).start()
+    if args.human:
+        pynput.keyboard.Listener(on_press=on_press, on_release=on_release).start()
 
-    ssbm_env = SSBMEnv(**vars(args))
+    ssbm_env = SSBMEnv(**args_dict)
     obs = ssbm_env.reset()
 
     done = False
@@ -638,7 +635,7 @@ if __name__ == "__main__":
                 joint_action['ai_1'] = 68
             if not args.cpu:
                 joint_action['ai_2'] = 0
-            obs, reward, done, info = ssbm_env.step(joint_action)
+            obs_1, reward, done, info = ssbm_env.step(joint_action)
             done = done['__all__']
 
             if not args.human:
@@ -647,8 +644,9 @@ if __name__ == "__main__":
                 if not done:
                     if not args.cpu:
                         joint_action['ai_2'] = 0
-                    obs, reward, done, info = ssbm_env.step(joint_action)
+                    obs_2, reward, done, info = ssbm_env.step(joint_action)
                     done = done['__all__']
+
     except KeyboardInterrupt as e:
         if args.dump_states:
             print("Got Ctrl-C, dumping state...")
