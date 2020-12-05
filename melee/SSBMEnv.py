@@ -176,6 +176,8 @@ class SSBMEnv(MultiAgentEnv):
         self.state_data = []
         self.every_nth = every_nth
         self.buffer_size = buffer_size
+        self.infos = {}
+        self.vals_to_log = ['damage_dealt', 'KOs']
 
         # Space creation
         self.get_reward = self._default_get_reward if not self.reward_func else self.reward_func
@@ -210,6 +212,13 @@ class SSBMEnv(MultiAgentEnv):
 
         p1rkill = int(p2DeltaStock < 0)
         p1rdeath = int(p1DeltaStock < 0)
+
+        damages = [p1DamageDealt, p1DamageTaken]
+        KOs = [p1rkill, p1rdeath]
+
+        for i, agent in enumerate(self.agents):
+            self.infos[agent]['damage_dealt'] += damages[i]
+            self.infos[agent]['KOs'] += KOs[i]
 
         p1_reward = self.aggro_coeff * p1DamageDealt - p1DamageTaken + p1rkill * self.kill_reward - p1rdeath * self.kill_reward
         p2_reward = self.aggro_coeff * p1DamageTaken - p1DamageDealt + p1rdeath * self.kill_reward - p1rkill * self.kill_reward
@@ -310,7 +319,7 @@ class SSBMEnv(MultiAgentEnv):
         # TODO write frames skipped to info  (I think if we miss more than 6 frames between steps we might be in trouble)
         info = {}
         for agent in self.agents:
-            info[agent] = {}
+            info[agent] = self.infos[agent].copy()
         return info
 
     def _perform_action(self, player, action_idx):
@@ -496,6 +505,9 @@ class SSBMEnv(MultiAgentEnv):
             self.agents = ['ai_1', 'ai_2']
         else:
             self.agents = ['ai_1']
+
+        for agent in self.agents:
+            self.infos[agent] = { key : 0 for key in self.vals_to_log }
 
         self.ctrlr_port = melee.gamestate.port_detector(self.gamestate, self.char1)
         self.ctrlr_op_port = melee.gamestate.port_detector(self.gamestate, self.char2)
