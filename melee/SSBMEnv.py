@@ -420,6 +420,13 @@ class SSBMEnv(MultiAgentEnv):
         state = self._get_state()
         done = self._get_done()
         info = self._get_info()
+        
+        if self.gamestate.menu_state != melee.enums.Menu.IN_GAME:
+            for key, _  in done.items():
+                done[key] = True
+        else:
+            for key, _ in done.items():
+                done[key] = False
 
         all_done = done['__all__']
 
@@ -435,14 +442,8 @@ class SSBMEnv(MultiAgentEnv):
                 # Log s_{t+1}
                 self.state_data.append({ "state" : state })
 
-        if self.gamestate.menu_state != melee.enums.Menu.IN_GAME:
-            for key, _  in done.items():
-                done[key] = True
-        else:
-            for key, _ in done.items():
-                done[key] = False
-
         if all_done:
+            print("StopDelphin")
             self._stop_dolphin()
         
         return state, reward, done, info
