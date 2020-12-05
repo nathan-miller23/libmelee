@@ -443,7 +443,6 @@ class SSBMEnv(MultiAgentEnv):
                 self.state_data.append({ "state" : state })
 
         if all_done:
-            print("StopDelphin")
             self._stop_dolphin()
         
         return state, reward, done, info
