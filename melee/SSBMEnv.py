@@ -19,8 +19,7 @@ Attr:
 """
 SLIPPI_ADDRESS = "127.0.0.1"
 SLIPPI_PORT=51441
-PLAYER_PORT=1
-OP_PORT=2
+PORTS = [1, 2]
 CONNECT_CODE=""
 
 # TODO: allow increasable bot difficulty
@@ -110,8 +109,8 @@ class SSBMEnv(MultiAgentEnv):
         - num_dolpin_retries (int): Number of times we re-try to start dolphin before giving up
         - dolphin_timeout (int): Number of seconds after which we consider a dolphin startup failed
     """
-    def __init__(self, dolphin_exe_path, ssbm_iso_path, char1=melee.Character.FOX, char2=melee.Character.FALCO,
-                stage=melee.Stage.FINAL_DESTINATION, cpu=False, cpu_level=1, log=False, reward_func=None, kill_reward=200, aggro_coeff=1, gamma=0.99, shaping_coeff=1, off_stage_weight=10, num_dolphin_retries=3, dolphin_timeout=20, dump_states=False, statedump_dir=os.path.abspath('.'), statedump_prefix="ssbm_out", every_nth=4, buffer_size=4, **kwargs):
+    def __init__(self, dolphin_exe_path, ssbm_iso_path, chars=(melee.Character.FOX, melee.Character.FALCO),
+                stage=melee.Stage.FINAL_DESTINATION, cpu=False, cpu_level=1, log=False, reward_func=None, kill_reward=200, aggro_coeff=1, gamma=0.99, shaping_coeff=1, off_stage_weight=10, num_dolphin_retries=3, dolphin_timeout=20, dump_states=False, statedump_dir=os.path.abspath('.'), statedump_prefix="ssbm_out", every_nth=(4,), buffer_size=(4,), **kwargs):
         ### Args checking ###
 
         # Paths
@@ -127,20 +126,14 @@ class SSBMEnv(MultiAgentEnv):
         if not type(cpu_level) == int or cpu_level < 1 or cpu_level > 9:
             raise ValueError("cpu_level must be an int in [1, 9]")
         # Enums
-        try:
-            is_valid = char1 in melee.Character
-        except:
-            raise ValueError("{} is not a valid character!".format(char1))
-        else:
-            if not is_valid:
-                raise ValueError("{} is not a valid character!".format(char1))
-        try:
-            is_valid = char2 in melee.Character
-        except:
-            raise ValueError("{} is not a valid character!".format(char2))
-        else:
-            if not is_valid:
-                raise ValueError("{} is not a valid character!".format(char2))
+        for char in chars:
+            try:
+                is_valid = char in melee.Character
+            except:
+                raise ValueError("{} is not a valid character!".format(char))
+            else:
+                if not is_valid:
+                    raise ValueError("{} is not a valid character!".format(char))
         try:
             is_valid = stage in melee.Stage
         except:
@@ -152,8 +145,7 @@ class SSBMEnv(MultiAgentEnv):
         # Assign instance variables
         self.dolphin_exe_path = dolphin_exe_path
         self.ssbm_iso_path = ssbm_iso_path
-        self.char1 = char1
-        self.char2 = char2
+        self.chars = chars
         self.stage = stage
         self.cpu = cpu
         self.cpu_level = cpu_level
@@ -177,89 +169,77 @@ class SSBMEnv(MultiAgentEnv):
         self.every_nth = every_nth
         self.buffer_size = buffer_size
         self.infos = {}
-        self.vals_to_log = ['damage_dealt', 'KOs']
+        self.vals_to_log = ['damage_dealt', 'KOs', 'deaths']
 
         # Space creation
         self.get_reward = self._default_get_reward if not self.reward_func else self.reward_func
-        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(self.OBSERVATION_DIM, self.buffer_size), dtype=np.float32)
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(self.OBSERVATION_DIM, self.buffer_size[0]), dtype=np.float32)
         self.action_space = spaces.Discrete(self.NUM_ACTIONS+1) # plus one for nop
         
-        self.p1_buffer = deque([np.zeros(self.OBSERVATION_DIM)]*self.buffer_size)
-        self.buffers = [self.p1_buffer]
-        if not self.cpu:
-            self.p2_buffer = deque([np.zeros(self.OBSERVATION_DIM)]*self.buffer_size)
-            self.buffers.append(self.p2_buffer)
 
-    def _default_get_reward(self, prev_gamestate, gamestate): # define reward function
-        sparse_reward = self._get_sparse_reward(prev_gamestate, gamestate)
-        potential_reward = self._get_potential_reward(prev_gamestate, gamestate)
+    def _default_get_reward(self, prev_gamestates, gamestates): # define reward function
+        sparse_reward = self._get_sparse_reward(prev_gamestates, gamestates)
+        potential_reward = self._get_potential_reward(prev_gamestates, gamestates)
 
 
         joint_shaped_reward = {}
         for i, agent in enumerate(self.agents):
-            joint_shaped_reward[agent] = sparse_reward[agent] + self.shaping_coeff * potential_reward[agent]
+            if self.has_obs[i]:
+                joint_shaped_reward[agent] = sparse_reward[agent] + self.shaping_coeff * potential_reward[agent]
 
         return joint_shaped_reward
 
-    def _get_sparse_reward(self, prev_gamestate, gamestate):
+    def _get_single_sparse_reward(self, prev_gamestate, gamestate, i):
+        my_port = self.ports[i]
+        other_port = self.ports[1-i]
+        myDamageDealt = max(int(gamestate.player[other_port].percent) - int(prev_gamestate.player[other_port].percent), 0)
+        myDamageTaken = max(int(gamestate.player[my_port].percent) - int(prev_gamestate.player[my_port].percent), 0)
+
+        myDeltaStock = int(gamestate.player[my_port].stock) - int(prev_gamestate.player[my_port].stock)
+        otherDeltaStock = int(gamestate.player[other_port].stock) - int(prev_gamestate.player[other_port].stock)
+
+        i_killed = int(otherDeltaStock < 0)
+        i_died = int(myDeltaStock < 0)
+
+        damage = myDamageDealt
+        KOs = i_killed
+        deaths = i_died
+
+        self.infos[self.agents[i]]['damage_dealt'] += damage
+        self.infos[self.agents[i]]['KOs'] += KOs
+        self.infos[self.agents[i]]['deaths'] += deaths
+
+        return self.aggro_coeff * myDamageDealt - myDamageTaken + i_killed * self.kill_reward - i_died * self.kill_reward
+
+    def _get_sparse_reward(self, prev_gamestates, gamestates):
         # TODO: make sure that the correct damage goes to the correct player
-        p1DamageDealt = max(int(gamestate.player[self.ctrlr_op_port].percent) - int(prev_gamestate.player[self.ctrlr_op_port].percent), 0)
-        p1DamageTaken = max(int(gamestate.player[self.ctrlr_port].percent) - int(prev_gamestate.player[self.ctrlr_port].percent), 0)
-
-        p1DeltaStock = int(gamestate.player[self.ctrlr_port].stock) - int(prev_gamestate.player[self.ctrlr_port].stock)
-        p2DeltaStock = int(gamestate.player[self.ctrlr_op_port].stock) - int(prev_gamestate.player[self.ctrlr_op_port].stock)
-
-
-        p1rkill = int(p2DeltaStock < 0)
-        p1rdeath = int(p1DeltaStock < 0)
-
-        damages = [p1DamageDealt, p1DamageTaken]
-        KOs = [p1rkill, p1rdeath]
-
+        joint_sparse_reward = {}
         for i, agent in enumerate(self.agents):
-            self.infos[agent]['damage_dealt'] += damages[i]
-            self.infos[agent]['KOs'] += KOs[i]
+            if self.has_obs[i]:
+                joint_sparse_reward[agent] = self._get_single_sparse_reward(prev_gamestates[i], gamestates[i], i)
+        
+        return joint_sparse_reward
 
-        p1_reward = self.aggro_coeff * p1DamageDealt - p1DamageTaken + p1rkill * self.kill_reward - p1rdeath * self.kill_reward
-        p2_reward = self.aggro_coeff * p1DamageTaken - p1DamageDealt + p1rdeath * self.kill_reward - p1rkill * self.kill_reward
+    def _potential_single(self, gamestate, i):
+        my_port = self.ports[i]
+        off_stage = -1 * int(gamestate.player[my_port].off_stage) * self.off_stage_weight
+        x = abs(gamestate.player[my_port].x)
 
-        rewards = [p1_reward, p2_reward]
+        return off_stage - x
 
-        joint_reward = {}
-        for i, agent in enumerate(self.agents):
-            joint_reward[agent] = rewards[i]
-
-        return joint_reward
-
-
-
-    def _potential(self, gamestate):
-        p1_off_stage = -1 * int(gamestate.player[self.ctrlr_port].off_stage) * self.off_stage_weight
-        p2_off_stage = -1 * int(gamestate.player[self.ctrlr_op_port].off_stage) * self.off_stage_weight
-        p1_x = abs(gamestate.player[self.ctrlr_port].x)
-        p2_x = abs(gamestate.player[self.ctrlr_op_port].x)
-
-        potentials = [p1_off_stage - p1_x, p2_off_stage - p2_x]
-
-        joint_potential = {}
-        for i, agent in enumerate(self.agents):
-            joint_potential[agent] = potentials[i]
-
-        return joint_potential
-
-    def _get_potential_reward(self, s, s_prime):
-        phi_s = self._potential(s)
-        phi_s_prime = self._potential(s_prime)
-
+    def _get_potential_reward(self, states, state_primes):
         joint_potential_reward = {}
 
         for i, agent in enumerate(self.agents):
-            potential_i = self.gamma * phi_s_prime[agent] - phi_s[agent]
-            joint_potential_reward[agent] = potential_i if potential_i < 50 else 0
+            if self.has_obs[i]:
+                phi_s = self._potential_single(states[i], i)
+                phi_s_prime = self._potential_single(state_primes[i], i)
+                potential_i = self.gamma * phi_s_prime - phi_s
+                joint_potential_reward[agent] = potential_i if potential_i < 50 else 0
 
         return joint_potential_reward
 
-    def _get_state(self):
+    def _get_single_state(self, gamestate, i):
         """
         [p1_char, p1_x, p1_y, p1_percent, p1_shield, p1_facing, p1_action_enum_value, p1_action_frame, p1_invulnerable,
          p1_invulnerable_left, p1_hitlag, p1_hitstun_frames_left, p1_jumps_left, p1_on_ground, p1_speed_air_x_self,
@@ -267,8 +247,10 @@ class SSBMEnv(MultiAgentEnv):
         """
         # TODO: make sure the correct state goes to the correct player
         # I make the assumption that p1 is *always* a non-cpu and p2 is the cpu, if present
-        p1 = self.gamestate.player[self.ctrlr_port]
-        p2 = self.gamestate.player[self.ctrlr_op_port]
+        my_port = self.ports[i]
+        other_port = self.ports[1 - i]
+        p1 = gamestate.player[my_port]
+        p2 = gamestate.player[other_port]
 
         # What buttons are pressed (or not)
         p1_button_state = [float(p1.controller_state.button[btn]) for btn in buttons]
@@ -299,33 +281,44 @@ class SSBMEnv(MultiAgentEnv):
         p2_state = [*p2_controller_state, *p2_character_state]
 
         # Final observations (note they're symmetrically encoded so that 'my' state always comes first)
-        p1_obs = np.array([*p1_state, self.gamestate.distance, *p2_state])
-        p2_obs = np.array([*p2_state, self.gamestate.distance, *p1_state])
+        return np.array([*p1_state, gamestate.distance, *p2_state])
 
-        observations = [p1_obs, p2_obs]
-        for i, buff in enumerate(self.buffers):
-            buff.pop()
-            buff.appendleft(observations[i])
+    def _get_state(self):
+        """
+        [p1_char, p1_x, p1_y, p1_percent, p1_shield, p1_facing, p1_action_enum_value, p1_action_frame, p1_invulnerable,
+         p1_invulnerable_left, p1_hitlag, p1_hitstun_frames_left, p1_jumps_left, p1_on_ground, p1_speed_air_x_self,
+         p1_speed_y_self, p1_speed_x_attack, p1_speed_y_attack, p1_speed_ground_x_self, distance_btw_players, ...p2 same attr...]
+        """
+        joint_obs = {}
+        for i, agent in enumerate(self.agents):
+            if self.has_obs[i]:
+                buff = self.buffers[i]
+                obs = self._get_single_state(self.gamestates[i], i)
+                buff.pop()
+                buff.appendleft(obs)
+                joint_obs[agent] = np.array(list(buff)).transpose(1, 0)
 
-        obs_dict = { agent_name : np.array(list(self.buffers[i])).transpose(1, 0) for i, agent_name in enumerate(self.agents) }
-
-        return obs_dict
+        return joint_obs
 
     def _get_done(self):
-        done =  self.gamestate.player[self.ctrlr_port].stock <= 0x0 or self.gamestate.player[self.ctrlr_op_port].stock <= 0x0
+        deads = [False] * len(self.ports)
+        for i, port in enumerate(self.ports):
+            deads[i] = self.global_gamestate.player[port].stock <= 0x0
+        done = any(deads)
         return {'__all__' : done }
 
     def _get_info(self):
         # TODO write frames skipped to info  (I think if we miss more than 6 frames between steps we might be in trouble)
         info = {}
-        for agent in self.agents:
-            info[agent] = self.infos[agent].copy()
+        for i, agent in enumerate(self.agents):
+            if self.has_obs[i]:
+                info[agent] = self.infos[agent].copy()
         return info
 
     def _perform_action(self, player, action_idx):
         if action_idx == 0:
             return
-        ctrlr = self.ctrlr if player == 0 else self.ctrlr_op
+        ctrlr = self.controllers[player]
         action_idx -= 1
         len_b = len(buttons)
         len_i = len(intervals)
@@ -347,12 +340,10 @@ class SSBMEnv(MultiAgentEnv):
                                     blocking_input=False,
                                     polling_mode=False,
                                     logger=self.logger)
-        self.ctrlr = melee.Controller(console=self.console,
-                                    port=PLAYER_PORT,
-                                    type=melee.ControllerType.STANDARD)
-        self.ctrlr_op = melee.Controller(console=self.console,
-                                    port=OP_PORT,
-                                    type=melee.ControllerType.STANDARD)
+        for i in range(len(self.chars)):
+            self.controllers[i] = melee.Controller(console=self.console,
+                                                    port=PORTS[i],
+                                                    type=melee.ControllerType.STANDARD)
         self.console.run(iso_path=self.ssbm_iso_path)
         self._is_dolphin_running = True
         print("Connecting to console...")
@@ -361,13 +352,10 @@ class SSBMEnv(MultiAgentEnv):
             raise RuntimeError("Failed to connect to console")
 
         # Plug our controller in
-        print("Connecting controller to console...")
-        if not self.ctrlr.connect():
-            print("ERROR: Failed to connect the controller.")
-            raise RuntimeError("Failed to connect to controller")
-        if not self.ctrlr_op.connect():
-            print("ERROR: Failed to connect the controller.")
-            raise RuntimeError("Failed to connect to controller")
+        print("Connecting controllers to console...")
+        for controller in self.controllers:
+            if not controller.connect():
+                raise RuntimeError("ERROR: Failed to connect the controller.")
         print("Controllers connected")
 
     def _step_through_menu(self):
@@ -375,24 +363,24 @@ class SSBMEnv(MultiAgentEnv):
         if time.time() - self._start_game_time > self.dolphin_timeout:
             raise TimeoutException()
 
-        self.gamestate = self.console.step()
-        menu_helper = melee.MenuHelper(controller_1=self.ctrlr,
-                                        controller_2=self.ctrlr_op,
-                                        character_1_selected=self.char1,
-                                        character_2_selected=self.char2,
+        self.global_gamestate = self.console.step()
+        menu_helper = melee.MenuHelper(controller_1=self.controllers[0],
+                                        controller_2=self.controllers[1],
+                                        character_1_selected=self.chars[0],
+                                        character_2_selected=self.chars[1],
                                         stage_selected=self.stage,
                                         connect_code=CONNECT_CODE,
                                         autostart=True,
                                         swag=False,
                                         make_cpu=self.cpu,
                                         level=self.cpu_level)
-        while self.gamestate.menu_state not in [melee.Menu.IN_GAME, melee.Menu.SUDDEN_DEATH]:
+        while self.global_gamestate.menu_state not in [melee.Menu.IN_GAME, melee.Menu.SUDDEN_DEATH]:
             if time.time() - self._start_game_time > self.dolphin_timeout:
                 raise TimeoutException()
-            self.gamestate = self.console.step()
-            menu_helper.step(self.gamestate)
+            self.global_gamestate = self.console.step()
+            menu_helper.step(self.global_gamestate)
             if self.log:
-                self.logger.logframe(self.gamestate)
+                self.logger.logframe(self.global_gamestate)
                 self.logger.writeframe()
 
     def _start_game(self):
@@ -427,34 +415,44 @@ class SSBMEnv(MultiAgentEnv):
         self._is_dolphin_running = False
 
     def step(self, joint_action): # step should advance our state (in the form of the obs space)
-        if set(joint_action.keys()).intersection(self.agents) != set(joint_action.keys()).union(self.agents):
+        if not set(joint_action.keys()).issubset(self.agents):
+            print(joint_action.keys())
+            print(self.agents)
             raise ValueError("Invalid agent in action dictionary!")
 
        # print("[INFO]: " + str(self.console.processingtime*1000) + " ms to process frame.")
 
         # why do we need to do this?
-        self.ctrlr_port = melee.gamestate.port_detector(self.gamestate, self.char1)
-        self.ctrlr_op_port = melee.gamestate.port_detector(self.gamestate, self.char2)
+        for i in range(len(self.chars)):
+            self.ports[i] = melee.gamestate.port_detector(self.global_gamestate, self.chars[i])
 
-        if self.ctrlr_port != self.ctrlr.port or self.ctrlr_op_port != self.ctrlr_op.port:
-            raise RuntimeError("Controller port inconsistency!")
+        for i in range(len(self.controllers)):
+            if self.ports[i] != self.controllers[i].port:
+                raise RuntimeError("Controller port inconsistency!")
 
-        prev_gamestate = self.gamestate
+        prev_gamestates = self.gamestates
     
         # perform actions
         for agent_idx, agent in enumerate(self.agents):
-            action = joint_action[agent]
+            action = joint_action.get(agent, 0)
             self._perform_action(agent_idx, action)      
 
         # step env
-        prev_frame = self.gamestate.frame
-        while self.gamestate.frame < prev_frame + self.every_nth:
-            self.gamestate = self.console.step()
-            if self._get_done()['__all__'] :
+        self.has_obs = [False] * len(self.agents)
+        while not any(self.has_obs):
+            self.global_gamestate = self.console.step()
+            for i in range(len(self.every_nth)):
+                if self.global_gamestate.frame % self.every_nth[i] == 0:
+                    self.gamestates[i] = self.global_gamestate
+                    self.has_obs[i] = True
+            if self._get_done()['__all__']:
+                for i in range(self.agents):
+                    self.gamestates[i] = self.global_gamestate
+                    self.has_obs[i] = True
                 break
         
         # Collect all transition data
-        reward = self.get_reward(prev_gamestate, self.gamestate)
+        reward = self.get_reward(prev_gamestates, self.gamestates)
         state = self._get_state()
         done = self._get_done()
         info = self._get_info()
@@ -464,8 +462,7 @@ class SSBMEnv(MultiAgentEnv):
         # Log (s_t, a_t, s'_t) data if necessary
         if self.dump_states:
             # Log a_t
-            for agent in self.agents:
-                self.state_data[-1][agent] = joint_action[agent]
+            self.state_data[-1] = joint_action
             # Log s'_t
             self.state_data[-1]['next_state'] = state
             # Begin next (s, a, s') tuple if not done
@@ -498,22 +495,31 @@ class SSBMEnv(MultiAgentEnv):
 
     def reset(self):    # TODO: should reset state to initial state, how to do this?
         self.dump_state()
-        # hashtag JustDolphinThings
-        self.start_game()
 
         if not self.cpu:
             self.agents = ['ai_1', 'ai_2']
         else:
             self.agents = ['ai_1']
 
-        for agent in self.agents:
+        self.gamestates = [None] * len(self.agents)
+        self.has_obs = [False] * len(self.agents)
+        self.buffers = [None] * len(self.agents)
+        self.ports = [None] * len(self.agents)
+        self.controllers = [None] * len(self.agents)
+
+        # hashtag JustDolphinThings
+        self.start_game()
+
+        for i, agent in enumerate(self.agents):
             self.infos[agent] = { key : 0 for key in self.vals_to_log }
+            self.gamestates[i] = self.global_gamestate
+            self.has_obs[i] = True
+            self.buffers[i] = deque([np.zeros(self.OBSERVATION_DIM)]*self.buffer_size[i])
+            self.ports[i] = melee.gamestate.port_detector(self.global_gamestate, self.chars[i])
 
-        self.ctrlr_port = melee.gamestate.port_detector(self.gamestate, self.char1)
-        self.ctrlr_op_port = melee.gamestate.port_detector(self.gamestate, self.char2)
-
-        if self.ctrlr_port != self.ctrlr.port or self.ctrlr_op_port != self.ctrlr_op.port:
-            raise RuntimeError("Controller port inconsistency!")
+        for i in range(len(self.controllers)):
+            if self.ports[i] != self.controllers[i].port:
+                raise RuntimeError("Controller port inconsistency!")
 
         # Return initial observation
         joint_obs = self._get_state()
