@@ -540,7 +540,9 @@ def get_action(name):
     return actions_list.index(name)
 
 keymap = {
+    'e': "BUTTON_MAIN(1.0, 1.0)", # up-right
     'w': "BUTTON_MAIN(0.5, 1.0)", # up
+    'q': "BUTTON_MAIN(0.0, 1.0)", # up-left
     'a': "BUTTON_MAIN(0.0, 0.5)", # left
     's': "BUTTON_MAIN(0.5, 0.0)", # down
     'd': "BUTTON_MAIN(1.0, 0.5)", # right
