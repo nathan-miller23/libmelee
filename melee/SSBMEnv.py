@@ -110,9 +110,8 @@ class SSBMEnv(MultiAgentEnv):
         - dolphin_timeout (int): Number of seconds after which we consider a dolphin startup failed
     """
     def __init__(self, dolphin_exe_path, ssbm_iso_path, chars=(melee.Character.FOX, melee.Character.FALCO),
-                stage=melee.Stage.FINAL_DESTINATION, cpu=False, cpu_level=1, log=False, reward_func=None, kill_reward=200, aggro_coeff=1, gamma=0.99, shaping_coeff=1, off_stage_weight=10, num_dolphin_retries=3, dolphin_timeout=20, dump_states=False, statedump_dir=os.path.abspath('.'), statedump_prefix="ssbm_out", every_nth=(4,), buffer_size=(4,), **kwargs):
+                stage=melee.Stage.FINAL_DESTINATION, cpu=False, cpu_level=1, log=False, reward_func=None, kill_reward=200, aggro_coeff=1, gamma=0.99, shaping_coeff=1, off_stage_weight=10, num_dolphin_retries=3, dolphin_timeout=20, dump_states=False, statedump_dir=os.path.abspath('.'), statedump_prefix="ssbm_out", every_nth=(4,), buffer_size=(4,), same_char=False, **kwargs):
         ### Args checking ###
-
         # Paths
         if not os.path.exists(dolphin_exe_path) or not os.path.isdir(dolphin_exe_path):
             raise ValueError("dolphin exe path {} is not a valid path to the executable directory!".format(dolphin_exe_path))
@@ -170,9 +169,11 @@ class SSBMEnv(MultiAgentEnv):
         self.buffer_size = buffer_size
         self.infos = {}
         self.vals_to_log = ['damage_dealt', 'KOs', 'deaths']
+        self.same_chars = same_char
 
         # Space creation
         self.get_reward = self._default_get_reward if not self.reward_func else self.reward_func
+        print(self.buffer_size)
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(self.OBSERVATION_DIM, self.buffer_size[0]), dtype=np.float32)
         self.action_space = spaces.Discrete(self.NUM_ACTIONS+1) # plus one for nop
         
@@ -427,7 +428,7 @@ class SSBMEnv(MultiAgentEnv):
             self.ports[i] = melee.gamestate.port_detector(self.global_gamestate, self.chars[i])
 
         for i in range(len(self.controllers)):
-            if self.ports[i] != self.controllers[i].port:
+            if self.ports[i] != self.controllers[i].port and not self.same_chars:
                 raise RuntimeError("Controller port inconsistency!")
 
         prev_gamestates = self.gamestates
@@ -518,7 +519,7 @@ class SSBMEnv(MultiAgentEnv):
             self.ports[i] = melee.gamestate.port_detector(self.global_gamestate, self.chars[i])
 
         for i in range(len(self.controllers)):
-            if self.ports[i] != self.controllers[i].port:
+            if self.ports[i] != self.controllers[i].port and not self.same_chars:
                 raise RuntimeError("Controller port inconsistency!")
 
         # Return initial observation
