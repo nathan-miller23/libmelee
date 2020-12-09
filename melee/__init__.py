@@ -11,5 +11,6 @@ from melee.framedata import *
 from melee.menuhelper import *
 from melee.stages import *
 from melee.version import *
+import melee.SSBMEnv as Env
 from melee.SSBMEnv import SSBMEnv
 from melee import menuhelper, techskill, framedata, stages
